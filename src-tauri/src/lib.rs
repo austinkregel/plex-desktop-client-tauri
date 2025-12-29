@@ -2,13 +2,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use url::Url;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(windows)]
+use std::net::{TcpListener, TcpStream};
 
 // HIGH-001: Keychain service name for token storage
 const KEYCHAIN_SERVICE: &str = "plex-desktop";
@@ -112,6 +117,13 @@ fn get_socket_path() -> PathBuf {
     runtime_dir.join("plex-desktop.sock")
 }
 
+#[cfg(windows)]
+const IPC_ADDR: &str = "127.0.0.1:37921";
+
+#[cfg(windows)]
+static IPC_SECRET: OnceLock<String> = OnceLock::new();
+
+#[cfg(unix)]
 fn get_lock_file_path() -> PathBuf {
     // Use XDG_RUNTIME_DIR if available, otherwise fall back to /tmp
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
@@ -121,6 +133,32 @@ fn get_lock_file_path() -> PathBuf {
     runtime_dir.join("plex-desktop.lock")
 }
 
+#[cfg(windows)]
+fn get_lock_file_path() -> PathBuf {
+    // Prefer a per-user directory on Windows.
+    // data_local_dir is typically: C:\Users\<User>\AppData\Local
+    let base_dir = dirs::data_local_dir()
+        .or_else(dirs::config_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let dir = base_dir.join("plex-desktop");
+    if !dir.exists() {
+        let _ = fs::create_dir_all(&dir);
+    }
+    dir.join("plex-desktop.lock")
+}
+
+#[cfg(windows)]
+fn parse_lock_file(contents: &str) -> Option<(u32, String)> {
+    let mut lines = contents.lines();
+    let pid = lines.next()?.trim().parse::<u32>().ok()?;
+    let secret = lines.next()?.trim().to_string();
+    if secret.is_empty() {
+        return None;
+    }
+    Some((pid, secret))
+}
+
+#[cfg(unix)]
 fn is_another_instance_running() -> bool {
     let lock_file = get_lock_file_path();
     
@@ -151,14 +189,104 @@ fn is_another_instance_running() -> bool {
     false
 }
 
+#[cfg(windows)]
+fn is_another_instance_running() -> bool {
+    let lock_file = get_lock_file_path();
+
+    if !lock_file.exists() {
+        return false;
+    }
+
+    // Try to read PID+secret from lock file and verify the process exists.
+    if let Ok(contents) = fs::read_to_string(&lock_file) {
+        if let Some((pid, secret)) = parse_lock_file(&contents) {
+            // Cache the secret for the running instance.
+            let _ = IPC_SECRET.set(secret);
+
+            // Use tasklist to check if PID exists.
+            // Example output contains the PID if the process is running.
+            let output = std::process::Command::new("cmd")
+                .args([
+                    "/C",
+                    &format!("tasklist /FI \"PID eq {}\" /NH", pid),
+                ])
+                .output();
+
+            if let Ok(output) = output {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    if stdout.contains(&pid.to_string()) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    // Lock file exists but process appears dead; remove it.
+    let _ = fs::remove_file(&lock_file);
+    false
+}
+
+#[cfg(unix)]
 fn create_lock_file() -> Result<(), String> {
     let lock_file = get_lock_file_path();
     let pid = std::process::id();
-    fs::write(&lock_file, pid.to_string())
-        .map_err(|e| format!("Failed to create lock file: {}", e))?;
+    if let Some(parent) = lock_file.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    use std::io::Write as _;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_file)
+    {
+        Ok(mut f) => {
+            write!(f, "{}", pid).map_err(|e| format!("Failed to write lock file: {}", e))?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err("Lock file already exists".to_string());
+        }
+        Err(e) => return Err(format!("Failed to create lock file: {}", e)),
+    }
     Ok(())
 }
 
+#[cfg(windows)]
+fn create_lock_file() -> Result<(), String> {
+    use rand::{rngs::OsRng, RngCore};
+    let lock_file = get_lock_file_path();
+    let pid = std::process::id();
+
+    if let Some(parent) = lock_file.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let mut secret_bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut secret_bytes);
+    let secret = secret_bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+    let _ = IPC_SECRET.set(secret.clone());
+
+    use std::io::Write as _;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_file)
+    {
+        Ok(mut f) => {
+            writeln!(f, "{}", pid).map_err(|e| format!("Failed to write lock file: {}", e))?;
+            writeln!(f, "{}", secret).map_err(|e| format!("Failed to write lock file: {}", e))?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err("Lock file already exists".to_string());
+        }
+        Err(e) => return Err(format!("Failed to create lock file: {}", e)),
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 fn remove_lock_file() {
     let lock_file = get_lock_file_path();
     let _ = fs::remove_file(&lock_file);
@@ -166,6 +294,13 @@ fn remove_lock_file() {
     let _ = fs::remove_file(&socket_path);
 }
 
+#[cfg(windows)]
+fn remove_lock_file() {
+    let lock_file = get_lock_file_path();
+    let _ = fs::remove_file(&lock_file);
+}
+
+#[cfg(unix)]
 fn send_url_to_existing_instance(url: &str) -> Result<(), String> {
     let socket_path = get_socket_path();
     
@@ -185,6 +320,36 @@ fn send_url_to_existing_instance(url: &str) -> Result<(), String> {
     }
 }
 
+#[cfg(windows)]
+fn send_url_to_existing_instance(url: &str) -> Result<(), String> {
+    let lock_file = get_lock_file_path();
+    let secret = fs::read_to_string(&lock_file)
+        .ok()
+        .and_then(|c| parse_lock_file(&c))
+        .map(|(_, s)| s)
+        .ok_or_else(|| "Failed to read IPC auth secret from lock file".to_string())?;
+
+    match TcpStream::connect(IPC_ADDR) {
+        Ok(mut stream) => {
+            // Format: "<secret>\n<url>"
+            let payload = format!("{}\n{}", secret, url);
+            stream
+                .write_all(payload.as_bytes())
+                .map_err(|e| format!("Failed to write to IPC socket: {}", e))?;
+            stream
+                .flush()
+                .map_err(|e| format!("Failed to flush IPC socket: {}", e))?;
+            eprintln!("Sent URL to existing instance: {}", url);
+            Ok(())
+        }
+        Err(e) => Err(format!(
+            "Failed to connect to existing instance: {}. Starting new instance.",
+            e
+        )),
+    }
+}
+
+#[cfg(unix)]
 fn start_ipc_listener(app_handle: AppHandle) {
     let socket_path = get_socket_path();
     
@@ -252,6 +417,85 @@ fn start_ipc_listener(app_handle: AppHandle) {
             Err(e) => {
                 eprintln!("Failed to bind IPC socket: {}", e);
             }
+        }
+    });
+}
+
+#[cfg(windows)]
+fn start_ipc_listener(app_handle: AppHandle) {
+    std::thread::spawn(move || match TcpListener::bind(IPC_ADDR) {
+        Ok(listener) => {
+            eprintln!("IPC listener started at {}", IPC_ADDR);
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(mut stream) => {
+                        let mut buffer = String::new();
+                        if stream.read_to_string(&mut buffer).is_ok() {
+                            let expected_secret = match IPC_SECRET.get() {
+                                Some(s) => s.as_str(),
+                                None => {
+                                    eprintln!("IPC secret not initialized; ignoring message");
+                                    continue;
+                                }
+                            };
+
+                            let (secret, url) = match buffer.split_once('\n') {
+                                Some((s, u)) => (s.trim(), u.trim()),
+                                None => {
+                                    eprintln!("Malformed IPC message; ignoring");
+                                    continue;
+                                }
+                            };
+
+                            if secret != expected_secret {
+                                eprintln!("IPC auth failed; ignoring message");
+                                continue;
+                            }
+
+                            let url = url.to_string();
+                            if !url.is_empty() {
+                                eprintln!("Received URL from another instance: {}", url);
+
+                                // Bring window to front
+                                if let Some(window) = app_handle.get_webview_window("main") {
+                                    let _ = window.set_focus();
+                                    let _ = window.show();
+                                }
+
+                                let app_handle_clone = app_handle.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    // Check if it's an OAuth callback
+                                    if url.contains("/auth")
+                                        || url.contains("/oauth")
+                                        || url.contains("?token=")
+                                        || url.contains("&token=")
+                                    {
+                                        if let Err(e) =
+                                            handle_oauth_callback(app_handle_clone.clone(), url)
+                                                .await
+                                        {
+                                            eprintln!("Error handling OAuth callback: {}", e);
+                                        }
+                                    } else {
+                                        // Regular deep link
+                                        if let Err(e) =
+                                            navigate_to_deep_link(app_handle_clone, url).await
+                                        {
+                                            eprintln!("Error handling deep link: {}", e);
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error accepting IPC connection: {}", e);
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to bind IPC socket: {}", e);
         }
     });
 }
