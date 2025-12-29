@@ -1,3 +1,5 @@
+_This project is not affiliated with Plex in any way._ 
+
 # Plex Desktop
 
 A native Linux desktop application for Plex that wraps `app.plex.tv` in a webview and adds custom protocol deep link support to navigate directly to library items.
