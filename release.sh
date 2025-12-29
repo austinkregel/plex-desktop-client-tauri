@@ -119,7 +119,7 @@ if [[ $REPLY =~ ^[Nn]$ ]]; then
 fi
 
 echo -e "${GREEN}💾 Step 5: Committing version changes${NC}"
-git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+git add package.json package-lock.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
 git commit -m "Bump version to $VERSION"
 
 echo ""
