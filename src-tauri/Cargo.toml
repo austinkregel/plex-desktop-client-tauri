@@ -1,6 +1,6 @@
 [package]
 name = "plex-desktop"
-version = "0.1.0"
+version = "v0.1.0"
 description = "Plex Desktop App with Deep Link Support"
 authors = ["you"]
 edition = "2021"
