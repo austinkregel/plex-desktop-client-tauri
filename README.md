@@ -11,6 +11,7 @@ A native Linux desktop application for Plex that wraps `app.plex.tv` in a webvie
 - Multiple server management
 - Automatic server URL resolution
 - OAuth authentication via system browser (credentials captured on redirect)
+- Manual server configuration support
 
 ## Installation
 
@@ -77,31 +78,56 @@ You can obtain your Plex token from:
 
 The app stores server configurations in `~/.config/plex-desktop/config.json`.
 
-### Adding Servers
+### Quick Setup (Recommended)
 
-You can add servers programmatically using the Tauri commands, or manually edit the config file:
+If auto-discovery doesn't work, use the helper script:
 
-```json
-{
-  "servers": [
-    {
-      "id": "server-1",
-      "name": "Home Server",
-      "baseUrl": "http://192.168.1.100:32400",
-      "isRemote": false,
-      "machineIdentifier": null
-    },
-    {
-      "id": "server-2",
-      "name": "Remote Server",
-      "baseUrl": "https://plex.example.com:32400",
-      "isRemote": true,
-      "machineIdentifier": null
-    }
-  ],
-  "defaultServerId": "server-1"
-}
+```bash
+./add-server.sh
 ```
+
+The script will:
+1. Ask for your server name and URL
+2. Automatically fetch the machine identifier
+3. Create or update the config file
+
+### Manual Setup
+
+For detailed manual setup instructions, see [MANUAL_SETUP.md](MANUAL_SETUP.md).
+
+**Quick manual steps:**
+
+1. **Find your server's machine identifier:**
+   ```bash
+   curl http://localhost:32400/ | grep machineIdentifier
+   ```
+
+2. **Edit the config file:**
+   ```bash
+   nano ~/.config/plex-desktop/config.json
+   ```
+
+3. **Add your server** (see `config.example.json` for format):
+   ```json
+   {
+     "servers": [
+       {
+         "id": "server-1",
+         "name": "My Plex Server",
+         "base_url": "http://localhost:32400",
+         "is_remote": false,
+         "machine_identifier": "YOUR_MACHINE_ID_HERE"
+       }
+     ],
+     "default_server_id": "server-1"
+   }
+   ```
+
+4. **Restart the app**
+
+### Adding Servers Programmatically
+
+You can also add servers using Tauri commands (see API Reference below).
 
 ### Server URL Resolution Priority
 
@@ -263,4 +289,4 @@ plex-desktop-app/
 
 ## License
 
-[Your License Here]
+[MIT License](LICENSE.md)

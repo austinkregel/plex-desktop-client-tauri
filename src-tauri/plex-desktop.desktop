@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Plex Desktop
+Comment=Native Plex Desktop App with Deep Link Support
+Exec=plex-desktop %u
+Icon=plex-desktop
+Type=Application
+Categories=AudioVideo;Network;
+MimeType=x-scheme-handler/plex-desktop;
+StartupNotify=true
+NoDisplay=false
+
+

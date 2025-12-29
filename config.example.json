@@ -1,0 +1,31 @@
+{
+  "servers": [
+    {
+      "id": "server-1",
+      "name": "My Plex Server",
+      "base_url": "http://192.168.1.100:32400",
+      "is_remote": false,
+      "machine_identifier": "abc123def456ghi789jkl012mno345pqr678"
+    },
+    {
+      "id": "server-2",
+      "name": "Remote Plex Server",
+      "base_url": "https://plex.example.com:32400",
+      "is_remote": true,
+      "machine_identifier": "abc123def456ghi789jkl012mno345pqr678"
+    }
+  ],
+  "default_server_id": "server-1",
+  "auth_token": "your-plex-access-token-here",
+  "client_id": "your-client-id-here",
+  "session_stats": {
+    "bandwidth": 10000,
+    "lanBandwidth": 20000
+  },
+  "device_settings": {
+    "quality": "original",
+    "autoAdjustQuality": false
+  }
+}
+
+
