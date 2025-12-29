@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://app.plex.tv https://*.plex.tv https://*.plex.direct; style-src 'self' 'unsafe-inline' https://app.plex.tv https://*.plex.tv; connect-src 'self' https://*.plex.tv https://*.plex.direct http://localhost:* http://127.0.0.1:* http://192.168.*.*:* http://10.*.*.*:* http://172.16.*.*:*; img-src 'self' data: https://*.plex.tv https://*.plex.direct http://localhost:* http://127.0.0.1:* http://192.168.*.*:* http://10.*.*.*:* http://172.16.*.*:*; font-src 'self' data: https://*.plex.tv; frame-src 'self' https://app.plex.tv https://*.plex.tv; media-src 'self' https://*.plex.tv https://*.plex.direct http://localhost:* http://127.0.0.1:* http://192.168.*.*:* http://10.*.*.*:* http://172.16.*.*:*;"
     }
   },
   "bundle": {
@@ -36,15 +36,7 @@
     ],
     "android": {
       "minSdkVersion": 24,
-      "targetSdkVersion": 33,
-      "compileSdkVersion": 33,
-      "package": "com.austinkregel.plexdesktop",
-      "versionCode": 1,
-      "versionName": "0.1.0",
-      "permissions": [
-        "android.permission.INTERNET",
-        "android.permission.ACCESS_NETWORK_STATE"
-      ]
+      "versionCode": 1
     }
   }
 }

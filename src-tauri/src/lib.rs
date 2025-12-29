@@ -2,11 +2,43 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use url::Url;
+
+// HIGH-001: Keychain service name for token storage
+const KEYCHAIN_SERVICE: &str = "plex-desktop";
+const KEYCHAIN_USERNAME: &str = "auth-token";
+
+// MED-004: Whitelist of allowed query parameter names for deep links
+// These are parameters that Plex web UI commonly uses and are safe to pass through
+const ALLOWED_QUERY_PARAMS: &[&str] = &[
+    "context",
+    "source",
+    "includeMeta",
+    "includeAdvanced",
+    "includeCollections",
+    "includeExternalMedia",
+    "type",
+    "X-Plex-Container-Start",
+    "X-Plex-Container-Size",
+];
+
+// MED-005: Rate limiting configuration
+const RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const RATE_LIMIT_MAX_REQUESTS: usize = 10;
+
+// MED-005: Rate limiter state - tracks requests per source
+// Using a simple in-memory store with a static Mutex
+static RATE_LIMITER: OnceLock<Mutex<HashMap<String, Vec<Instant>>>> = OnceLock::new();
+
+fn get_rate_limiter() -> &'static Mutex<HashMap<String, Vec<Instant>>> {
+    RATE_LIMITER.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -55,7 +87,20 @@ fn get_config_path() -> PathBuf {
         fs::create_dir_all(&config_dir).expect("Failed to create config directory");
     }
 
-    config_dir.join("config.json")
+    let config_path = config_dir.join("config.json");
+    
+    // MED-003: Set config file permissions to 0o600 if file exists
+    #[cfg(unix)]
+    {
+        if config_path.exists() {
+            if let Ok(mut perms) = fs::metadata(&config_path).map(|m| m.permissions()) {
+                perms.set_mode(0o600);
+                let _ = fs::set_permissions(&config_path, perms);
+            }
+        }
+    }
+    
+    config_path
 }
 
 fn get_socket_path() -> PathBuf {
@@ -152,6 +197,14 @@ fn start_ipc_listener(app_handle: AppHandle) {
     std::thread::spawn(move || {
         match UnixListener::bind(&socket_path_clone) {
             Ok(listener) => {
+                // MED-001: Set socket permissions to 0o600 (read/write for owner only)
+                #[cfg(unix)]
+                {
+                    if let Ok(mut perms) = fs::metadata(&socket_path_clone).map(|m| m.permissions()) {
+                        perms.set_mode(0o600);
+                        let _ = fs::set_permissions(&socket_path_clone, perms);
+                    }
+                }
                 eprintln!("IPC listener started at {:?}", socket_path_clone);
                 
                 for stream in listener.incoming() {
@@ -240,6 +293,17 @@ fn save_config(config: &AppConfig) -> Result<(), String> {
 
     fs::write(&config_path, content).map_err(|e| format!("Failed to write config: {}", e))?;
 
+    // MED-003: Set config file permissions to 0o600 (read/write for owner only)
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(&config_path)
+            .map_err(|e| format!("Failed to get config file metadata: {}", e))?
+            .permissions();
+        perms.set_mode(0o600);
+        fs::set_permissions(&config_path, perms)
+            .map_err(|e| format!("Failed to set config file permissions: {}", e))?;
+    }
+
     Ok(())
 }
 
@@ -251,6 +315,56 @@ fn validate_server_url(url: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// HIGH-003: Normalizes a URL to its origin (scheme + host + port).
+/// Returns the normalized origin string for comparison purposes.
+fn normalize_url_to_origin(url: &str) -> Result<String, String> {
+    let parsed = Url::parse(url).map_err(|_| "Invalid URL format".to_string())?;
+
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("URL must use http:// or https:// scheme".to_string());
+    }
+
+    let host = parsed.host_str().ok_or_else(|| "Missing host in URL".to_string())?;
+    let port = parsed.port();
+    
+    Ok(if let Some(p) = port {
+        format!("{}://{}:{}", parsed.scheme(), host, p)
+    } else {
+        format!("{}://{}", parsed.scheme(), host)
+    })
+}
+
+/// HIGH-003: Validates that a deep link baseUrl matches one of the allowed server origins.
+/// This is a pure function that takes a list of allowed origins for testability.
+fn validate_deep_link_base_url_against_origins(
+    base_url: &str,
+    allowed_origins: &[String],
+) -> Result<(), String> {
+    let normalized_origin = normalize_url_to_origin(base_url)?;
+
+    if allowed_origins.iter().any(|origin| origin == &normalized_origin) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Deep link baseUrl '{}' does not match any configured server",
+            base_url
+        ))
+    }
+}
+
+/// HIGH-003: Validates that a deep link baseUrl matches a configured server.
+/// Normalizes the URL to origin (scheme + host + port) and checks against configured servers.
+fn validate_deep_link_base_url(base_url: &str) -> Result<(), String> {
+    let config = load_config();
+    let allowed_origins: Vec<String> = config
+        .servers
+        .iter()
+        .filter_map(|server| normalize_url_to_origin(&server.base_url).ok())
+        .collect();
+
+    validate_deep_link_base_url_against_origins(base_url, &allowed_origins)
 }
 
 #[tauri::command]
@@ -359,20 +473,109 @@ fn get_default_server() -> Result<Option<ServerConfig>, String> {
     }
 }
 
+// HIGH-001: Helper function to get token from keychain
+fn get_token_from_keychain() -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USERNAME)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+    
+    match entry.get_password() {
+        Ok(token) => Ok(Some(token)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("Failed to get token from keychain: {}", e)),
+    }
+}
+
+// HIGH-001: Helper function to set token in keychain
+fn set_token_in_keychain(token: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USERNAME)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+    
+    entry.set_password(token)
+        .map_err(|e| format!("Failed to set token in keychain: {}", e))?;
+    
+    Ok(())
+}
+
+// HIGH-001: Migrate token from config file to keychain (one-time migration)
+fn migrate_token_from_config() -> Result<(), String> {
+    let config = load_config();
+    
+    // If token exists in config and not in keychain, migrate it
+    if let Some(token) = config.auth_token {
+        // Check if token already exists in keychain
+        let keychain_has_token = match get_token_from_keychain() {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(e) => {
+                eprintln!("Warning: Failed to check keychain during migration: {}", e);
+                // If we can't check keychain, try to migrate anyway (will overwrite if exists)
+                false
+            }
+        };
+        
+        if !keychain_has_token {
+            // Token in config but not in keychain, migrate it
+            eprintln!("Migrating token from config file to keychain...");
+            if let Err(e) = set_token_in_keychain(&token) {
+                eprintln!("Warning: Failed to migrate token to keychain: {}", e);
+                return Err(e);
+            }
+            
+            // Remove token from config file
+            let mut config = load_config();
+            config.auth_token = None;
+            if let Err(e) = save_config(&config) {
+                eprintln!("Warning: Failed to remove token from config file: {}", e);
+                // Don't fail migration if we can't remove from config
+            } else {
+                eprintln!("Token migrated successfully");
+            }
+        } else {
+            // Token already in keychain, remove from config file
+            let mut config = load_config();
+            if config.auth_token.is_some() {
+                config.auth_token = None;
+                if let Err(e) = save_config(&config) {
+                    eprintln!("Warning: Failed to remove token from config file: {}", e);
+                }
+            }
+        }
+    }
+    
+    Ok(())
+}
+
 #[tauri::command]
 fn get_auth_token() -> Result<Option<String>, String> {
-    let config = load_config();
-    Ok(config.auth_token)
+    // HIGH-001: Try keychain first
+    match get_token_from_keychain() {
+        Ok(Some(token)) => Ok(Some(token)),
+        Ok(None) => {
+            // Token not in keychain, try migration from config (non-blocking)
+            let _ = migrate_token_from_config();
+            // Try keychain again after migration attempt
+            get_token_from_keychain()
+        }
+        Err(e) => {
+            // If keychain fails, try migration as fallback
+            let _ = migrate_token_from_config();
+            get_token_from_keychain()
+        }
+    }
 }
 
 #[tauri::command]
 fn set_auth_token(token: String) -> Result<(), String> {
     eprintln!("Setting auth token...");
-    let mut config = load_config();
-    let had_token = config.auth_token.is_some();
-    config.auth_token = Some(token.clone());
-    save_config(&config)?;
-    eprintln!("Auth token stored successfully");
+    
+    // HIGH-001: Check if we already have a token
+    let had_token = get_token_from_keychain()
+        .map(|opt| opt.is_some())
+        .unwrap_or(false);
+    
+    // Store token in keychain
+    set_token_in_keychain(&token)?;
+    eprintln!("Auth token stored successfully in keychain");
 
     // If this is a new token and we don't have servers, trigger discovery
     if !had_token {
@@ -428,7 +631,7 @@ fn is_oauth_url(url: &str) -> bool {
 }
 
 fn extract_token_from_url(url: &str) -> Option<String> {
-    eprintln!("Extracting token from URL: {}", url);
+    eprintln!("Extracting token from URL (redacted)");
 
     // First, try simple string parsing for plex-desktop:// URLs
     if url.starts_with("plex-desktop://") {
@@ -459,7 +662,7 @@ fn extract_token_from_url(url: &str) -> Option<String> {
     // Check query parameters for token
     for (key, value) in parsed.query_pairs() {
         if key == "token" || key == "access_token" || key == "authToken" {
-            eprintln!("Found token in query: {}", value);
+            eprintln!("Found token in query (redacted)");
             return Some(value.to_string());
         }
     }
@@ -483,7 +686,7 @@ fn extract_token_from_url(url: &str) -> Option<String> {
             .or_else(|| fragment_params.get("access_token"))
             .or_else(|| fragment_params.get("authToken"))
         {
-            eprintln!("Found token in fragment: {}", token);
+            eprintln!("Found token in fragment (redacted)");
             return Some(token.clone());
         }
     }
@@ -494,7 +697,7 @@ fn extract_token_from_url(url: &str) -> Option<String> {
 
 #[tauri::command]
 async fn handle_oauth_callback(app: AppHandle, url: String) -> Result<(), String> {
-    eprintln!("Handling OAuth callback with URL: {}", url);
+    eprintln!("Handling OAuth callback (URL redacted)");
 
     // Extract token from callback URL
     if let Some(token) = extract_token_from_url(&url) {
@@ -502,7 +705,7 @@ async fn handle_oauth_callback(app: AppHandle, url: String) -> Result<(), String
 
         // Store the token
         set_auth_token(token.clone())?;
-        eprintln!("Token stored in config");
+        eprintln!("Token stored successfully");
 
         // Notify frontend that auth is complete
         app.emit("oauth-complete", token.clone())
@@ -522,11 +725,8 @@ async fn handle_oauth_callback(app: AppHandle, url: String) -> Result<(), String
 
         Ok(())
     } else {
-        eprintln!("ERROR: No token found in OAuth callback URL: {}", url);
-        Err(format!(
-            "No token found in OAuth callback. URL was: {}",
-            url
-        ))
+        eprintln!("ERROR: No token found in OAuth callback (URL redacted)");
+        Err("No token found in OAuth callback".to_string())
     }
 }
 
@@ -897,7 +1097,7 @@ async fn extract_token_from_webview(app: AppHandle) -> Result<Option<String>, St
                     interceptedToken = token;
                     window.__plex_desktop_token = token;
                     window.__plex_token_updated = true;
-                    console.log('Intercepted X-Plex-Token from fetch URL:', token.substring(0, 10) + '...');
+                    console.log('Intercepted X-Plex-Token from fetch URL (redacted)');
                 }
                 }
                 
@@ -917,7 +1117,7 @@ async fn extract_token_from_webview(app: AppHandle) -> Result<Option<String>, St
                         interceptedToken = token;
                         window.__plex_desktop_token = token;
                         window.__plex_token_updated = true;
-                        console.log('Intercepted X-Plex-Token from XHR URL:', token.substring(0, 10) + '...');
+                        console.log('Intercepted X-Plex-Token from XHR URL (redacted)');
                     }
                 }
                 
@@ -934,7 +1134,7 @@ async fn extract_token_from_webview(app: AppHandle) -> Result<Option<String>, St
                         interceptedToken = token;
                         window.__plex_desktop_token = token;
                         window.__plex_token_updated = true;
-                        console.log('Intercepted X-Plex-Token from URL change:', token.substring(0, 10) + '...');
+                        console.log('Intercepted X-Plex-Token from URL change (redacted)');
                     }
                     lastUrl = currentUrl;
                 }
@@ -948,7 +1148,7 @@ async fn extract_token_from_webview(app: AppHandle) -> Result<Option<String>, St
                     interceptedToken = token;
                     window.__plex_desktop_token = token;
                     window.__plex_token_updated = true;
-                    console.log('Intercepted X-Plex-Token from initial URL:', token.substring(0, 10) + '...');
+                    console.log('Intercepted X-Plex-Token from initial URL (redacted)');
                 }
             }
             
@@ -968,7 +1168,7 @@ async fn extract_token_from_webview(app: AppHandle) -> Result<Option<String>, St
                     if (storedToken && storedToken !== window.__plex_desktop_token) {
                         window.__plex_desktop_token = storedToken;
                         window.__plex_token_updated = true;
-                        console.log('Found token in storage:', storedToken.substring(0, 10) + '...');
+                        console.log('Found token in storage (redacted)');
                         
                         // Try to notify via postMessage
                         try {
@@ -1100,7 +1300,7 @@ async fn extract_token_from_webview(app: AppHandle) -> Result<Option<String>, St
                 if (storedToken) {
                     window.__plex_desktop_token = storedToken;
                     window.__plex_token_updated = true; // Mark as updated so frontend picks it up
-                    console.log('Found token in storage:', storedToken.substring(0, 10) + '...');
+                    console.log('Found token in storage (redacted)');
                     
                     // Try to notify Tauri immediately
                     if (window.__TAURI_INTERNALS__) {
@@ -1190,7 +1390,7 @@ async fn discover_servers_from_token(token: String) -> Result<Vec<DiscoveredServ
 
     // Store the token first
     set_auth_token(token.clone())?;
-    eprintln!("Token stored in config");
+    eprintln!("Token stored successfully");
 
     // Fetch resources from Plex API
     let servers = fetch_plex_resources(token).await?;
@@ -1295,15 +1495,24 @@ fn parse_deep_link(
 
     let query_params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
 
-    // Build query string with all parameters except 'key' (we handle key separately)
+    // MED-004: Build query string with validated parameters only
+    // Only allow whitelisted query parameters to prevent XSS via malicious params
     let mut extra_params = Vec::new();
     for (key, value) in &query_params {
-        if key != "key" && key != "baseUrl" && key != "serverId" {
+        // Skip our internal parameters
+        if key == "key" || key == "baseUrl" || key == "serverId" {
+            continue;
+        }
+        
+        // MED-004: Only allow whitelisted parameter names
+        if ALLOWED_QUERY_PARAMS.contains(&key.as_str()) {
             extra_params.push(format!(
                 "{}={}",
                 urlencoding::encode(key),
                 urlencoding::encode(value)
             ));
+        } else {
+            eprintln!("MED-004: Rejected unknown query parameter: {}", key);
         }
     }
     let query_string = if extra_params.is_empty() {
@@ -1341,7 +1550,14 @@ fn parse_deep_link(
     if let Some(encoded_url) = query_params.get("url") {
         if let Ok(decoded_url) = urlencoding::decode(encoded_url) {
             if let Ok(parsed_url) = Url::parse(&decoded_url) {
-                let base_url = format!("{}://{}", parsed_url.scheme(), parsed_url.host_str().unwrap_or(""));
+                // HIGH-003: Preserve port when constructing base_url
+                let host = parsed_url.host_str().unwrap_or("");
+                let port = parsed_url.port();
+                let base_url = if let Some(p) = port {
+                    format!("{}://{}:{}", parsed_url.scheme(), host, p)
+                } else {
+                    format!("{}://{}", parsed_url.scheme(), host)
+                };
                 let key = parsed_url.path().to_string();
                 return Ok((Some(base_url), None, Some(key), query_string));
             }
@@ -1415,8 +1631,38 @@ fn construct_plex_url(
     url
 }
 
+// MED-005: Rate limiting helper function
+fn check_rate_limit(source: &str) -> Result<(), String> {
+    let limiter = get_rate_limiter();
+    let mut store = limiter.lock().map_err(|e| format!("Rate limiter lock error: {}", e))?;
+    
+    let now = Instant::now();
+    let window_start = now - Duration::from_secs(RATE_LIMIT_WINDOW_SECS);
+    
+    // Clean up old entries
+    let requests = store.entry(source.to_string()).or_insert_with(Vec::new);
+    requests.retain(|&time| time > window_start);
+    
+    // Check if limit exceeded
+    if requests.len() >= RATE_LIMIT_MAX_REQUESTS {
+        return Err(format!(
+            "Rate limit exceeded: maximum {} requests per {} seconds",
+            RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_SECS
+        ));
+    }
+    
+    // Record this request
+    requests.push(now);
+    Ok(())
+}
+
 #[tauri::command]
 async fn navigate_to_deep_link(app: AppHandle, url: String) -> Result<(), String> {
+    // MED-005: Apply rate limiting
+    // Use a simple identifier - in production, you might want to use IP address or session ID
+    let rate_limit_source = "deep-link"; // Could be enhanced to use actual source identifier
+    check_rate_limit(rate_limit_source)?;
+    
     eprintln!("Navigating to deep link: {}", url);
     let (base_url_override, server_id, key, extra_query) = parse_deep_link(&url)?;
 
@@ -1427,7 +1673,8 @@ async fn navigate_to_deep_link(app: AppHandle, url: String) -> Result<(), String
 
     // Resolve the actual server URL
     let resolved_base_url = if let Some(override_url) = base_url_override {
-        validate_server_url(&override_url)?;
+        // HIGH-003: Validate that the override URL matches a configured server
+        validate_deep_link_base_url(&override_url)?;
         override_url
     } else {
         let resolved = resolve_server_url(None, server_id.as_deref())?;
@@ -1495,6 +1742,11 @@ pub fn run() {
         remove_lock_file();
         std::process::exit(0);
     });
+    
+    // HIGH-001: Migrate token from config file to keychain on startup
+    if let Err(e) = migrate_token_from_config() {
+        eprintln!("Warning: Token migration failed: {}", e);
+    }
     
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -1749,6 +2001,138 @@ mod tests {
 
         // Invalid scheme
         assert!(parse_deep_link("https://example.com").is_err());
+    }
+
+    #[test]
+    fn test_parse_deep_link_format1_port_preservation() {
+        // HIGH-003: Test that Format 1 preserves ports when parsing baseUrl
+        // Format 1: plex-desktop://open?url={encoded_url}
+        
+        // Test with port
+        let encoded_with_port = urlencoding::encode("http://192.168.1.100:32400/web/index.html#!/server/abc123/details?key=/library/metadata/123");
+        let (base_url, server_id, key, _) = parse_deep_link(
+            &format!("plex-desktop://open?url={}", encoded_with_port)
+        ).unwrap();
+        assert_eq!(base_url, Some("http://192.168.1.100:32400".to_string()));
+        assert_eq!(key, Some("/web/index.html#!/server/abc123/details".to_string()));
+
+        // Test without port (default port)
+        let encoded_no_port = urlencoding::encode("https://plex.example.com/web/index.html#!/details?key=/library/metadata/456");
+        let (base_url, server_id, key, _) = parse_deep_link(
+            &format!("plex-desktop://open?url={}", encoded_no_port)
+        ).unwrap();
+        assert_eq!(base_url, Some("https://plex.example.com".to_string()));
+        assert_eq!(key, Some("/web/index.html#!/details".to_string()));
+
+        // Test with non-standard port
+        let encoded_custom_port = urlencoding::encode("http://localhost:8080/web/index.html#!/details?key=/library/metadata/789");
+        let (base_url, server_id, key, _) = parse_deep_link(
+            &format!("plex-desktop://open?url={}", encoded_custom_port)
+        ).unwrap();
+        assert_eq!(base_url, Some("http://localhost:8080".to_string()));
+    }
+
+    #[test]
+    fn test_validate_deep_link_base_url_allowlist() {
+        // HIGH-003: Test the baseUrl allowlist validation helper
+        
+        // Setup: Create a list of allowed origins
+        let allowed_origins = vec![
+            "http://localhost:32400".to_string(),
+            "https://plex.example.com".to_string(),
+            "http://192.168.1.100:32400".to_string(),
+        ];
+
+        // Test: Valid URLs that match allowed origins
+        assert!(validate_deep_link_base_url_against_origins(
+            "http://localhost:32400",
+            &allowed_origins
+        ).is_ok());
+        
+        assert!(validate_deep_link_base_url_against_origins(
+            "https://plex.example.com",
+            &allowed_origins
+        ).is_ok());
+        
+        assert!(validate_deep_link_base_url_against_origins(
+            "http://192.168.1.100:32400",
+            &allowed_origins
+        ).is_ok());
+
+        // Test: URLs with paths/query should still match (normalized to origin)
+        assert!(validate_deep_link_base_url_against_origins(
+            "http://localhost:32400/web/index.html",
+            &allowed_origins
+        ).is_ok());
+        
+        assert!(validate_deep_link_base_url_against_origins(
+            "https://plex.example.com:443/web/index.html?key=value",
+            &allowed_origins
+        ).is_ok());
+
+        // Test: Invalid URLs that don't match
+        assert!(validate_deep_link_base_url_against_origins(
+            "http://unconfigured-server:32400",
+            &allowed_origins
+        ).is_err());
+        
+        assert!(validate_deep_link_base_url_against_origins(
+            "https://malicious.example.com",
+            &allowed_origins
+        ).is_err());
+
+        // Test: Port mismatch
+        assert!(validate_deep_link_base_url_against_origins(
+            "http://localhost:8080",
+            &allowed_origins
+        ).is_err());
+
+        // Test: Scheme mismatch
+        assert!(validate_deep_link_base_url_against_origins(
+            "https://localhost:32400",
+            &allowed_origins
+        ).is_err());
+
+        // Test: Invalid URL format
+        assert!(validate_deep_link_base_url_against_origins(
+            "not-a-url",
+            &allowed_origins
+        ).is_err());
+
+        // Test: Invalid scheme
+        assert!(validate_deep_link_base_url_against_origins(
+            "ftp://localhost:32400",
+            &allowed_origins
+        ).is_err());
+    }
+
+    #[test]
+    fn test_normalize_url_to_origin() {
+        // Test normalization helper function
+        
+        // With port
+        assert_eq!(
+            normalize_url_to_origin("http://localhost:32400").unwrap(),
+            "http://localhost:32400"
+        );
+        
+        // Without port (default)
+        assert_eq!(
+            normalize_url_to_origin("https://plex.example.com").unwrap(),
+            "https://plex.example.com"
+        );
+        
+        // With path and query (should normalize to origin only)
+        assert_eq!(
+            normalize_url_to_origin("http://192.168.1.100:32400/web/index.html?key=value").unwrap(),
+            "http://192.168.1.100:32400"
+        );
+        
+        // Invalid URL
+        assert!(normalize_url_to_origin("not-a-url").is_err());
+        
+        // Invalid scheme
+        assert!(normalize_url_to_origin("ftp://example.com").is_err());
     }
 
     #[test]
