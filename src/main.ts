@@ -8,10 +8,27 @@ console.log("Plex Desktop App initialized");
 
 // Listen for messages from the injected script in the webview
 window.addEventListener("message", async (event) => {
-  // Only accept messages from the same origin (the webview)
-  if (event.data && event.data.type === "plex-token-found") {
+  // HIGH-002: Only accept messages from the expected origin (app.plex.tv)
+  if (event.origin !== "https://app.plex.tv") {
+    console.warn("Rejected postMessage from unauthorized origin:", event.origin);
+    return;
+  }
+
+  // Validate payload shape - ensure event.data is an object
+  if (!event.data || typeof event.data !== "object") {
+    console.warn("Rejected postMessage with invalid payload shape");
+    return;
+  }
+
+  if (event.data.type === "plex-token-found") {
+    // Validate token is a string
+    if (typeof event.data.token !== "string") {
+      console.warn("Rejected postMessage with invalid token type");
+      return;
+    }
+    
     const token = event.data.token;
-    console.log("Received token from webview via postMessage:", token.substring(0, 10) + "...");
+    console.log("Received token from webview via postMessage (redacted)");
     
     // Store the token
     try {
@@ -25,7 +42,13 @@ window.addEventListener("message", async (event) => {
     }
   }
   
-  if (event.data && event.data.type === "plex-client-id-found") {
+  if (event.data.type === "plex-client-id-found") {
+    // Validate clientId is a string
+    if (typeof event.data.clientId !== "string") {
+      console.warn("Rejected postMessage with invalid clientId type");
+      return;
+    }
+    
     const clientId = event.data.clientId;
     console.log("Received clientID from webview:", clientId);
     try {
