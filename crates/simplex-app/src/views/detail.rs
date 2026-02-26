@@ -1,9 +1,10 @@
 use gtk4::prelude::*;
-use gtk4::{Box as GtkBox, Button, Label, Orientation, ScrolledWindow, Spinner};
+use gtk4::{Box as GtkBox, Button, Label, ListBox, ListBoxRow, Orientation, ScrolledWindow, Spinner};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use crate::widgets::entity_link::make_entity_link;
 use crate::widgets::poster_grid::PosterGrid;
 use crate::window::AppState;
 
@@ -91,9 +92,17 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                     let children = simplex_core::api::library::get_children(&bu, &tk, &key_c)
                         .await
                         .unwrap_or_default();
+                    let artist_discography = if item.media_type.as_deref() == Some("artist") {
+                        simplex_core::api::library::get_artist_discography(&bu, &tk, &key_c)
+                            .await
+                            .ok()
+                    } else {
+                        None
+                    };
                     let _ = tx.send(Ok(DetailData {
                         item,
                         children,
+                        artist_discography,
                         base_url: bu,
                         token: tk,
                     })).await;
@@ -128,6 +137,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
 struct DetailData {
     item: simplex_core::api::library::MetadataItem,
     children: Vec<simplex_core::api::library::MetadataItem>,
+    artist_discography: Option<simplex_core::api::library::ArtistDiscography>,
     base_url: String,
     token: String,
 }
@@ -139,11 +149,9 @@ fn build_detail_ui(
 ) {
     let item = &data.item;
 
-    let title_label = Label::new(Some(&item.title));
-    title_label.add_css_class("title-1");
-    title_label.set_halign(gtk4::Align::Start);
-    title_label.set_wrap(true);
-    container.append(&title_label);
+    let title_btn = make_entity_link(&item.title, &item.rating_key, "detail", state.clone());
+    title_btn.add_css_class("title-1");
+    container.append(&title_btn);
 
     let mut meta_parts = Vec::new();
     if let Some(year) = item.year {
@@ -177,6 +185,29 @@ fn build_detail_ui(
         sub_label.add_css_class("dim-label");
         sub_label.set_halign(gtk4::Align::Start);
         container.append(&sub_label);
+    }
+
+    // Make known hierarchy names drill into their own info pages.
+    if let (Some(show), Some(show_key)) = (&item.grandparent_title, &item.grandparent_rating_key) {
+        let show_row = GtkBox::new(Orientation::Horizontal, 4);
+        let label = Label::new(Some("Show:"));
+        label.add_css_class("dim-label");
+        show_row.append(&label);
+        show_row.append(&make_entity_link(show, show_key, "detail", state.clone()));
+        container.append(&show_row);
+    }
+    if let (Some(album_or_season), Some(parent_key)) = (&item.parent_title, &item.parent_rating_key) {
+        let parent_row = GtkBox::new(Orientation::Horizontal, 4);
+        let prefix = match item.media_type.as_deref() {
+            Some("track") => "Album:",
+            Some("episode") => "Season:",
+            _ => "Parent:",
+        };
+        let label = Label::new(Some(prefix));
+        label.add_css_class("dim-label");
+        parent_row.append(&label);
+        parent_row.append(&make_entity_link(album_or_season, parent_key, "detail", state.clone()));
+        container.append(&parent_row);
     }
 
     let is_playable = matches!(
@@ -256,21 +287,52 @@ fn build_detail_ui(
             button_row.append(&play_btn);
         }
 
+        // Explicit parent-container navigation for episode/track detail pages.
+        if let (Some(parent_title), Some(parent_key)) = (&item.parent_title, &item.parent_rating_key) {
+            let label = match item.media_type.as_deref() {
+                Some("episode") => Some("View Full Season"),
+                Some("track") => Some("View Full Album"),
+                _ => None,
+            };
+            if let Some(label) = label {
+                let view_parent_btn = Button::with_label(label);
+                view_parent_btn.add_css_class("pill");
+                let state_parent = state.clone();
+                let key_parent = parent_key.clone();
+                view_parent_btn.connect_clicked(move |_| {
+                    crate::window::navigate_to_detail(&state_parent, &key_parent, "detail");
+                });
+                view_parent_btn.set_tooltip_text(Some(&format!("Open {parent_title}")));
+                button_row.append(&view_parent_btn);
+            }
+        }
+
         container.append(&button_row);
     }
 
     if let Some(ref summary) = item.summary {
         if !summary.is_empty() {
-            let summary_label = Label::new(Some(summary));
+            let summary_text = if item.media_type.as_deref() == Some("artist") {
+                truncate_text(summary, 800)
+            } else {
+                summary.clone()
+            };
+            let summary_label = Label::new(Some(&summary_text));
             summary_label.set_wrap(true);
             summary_label.set_halign(gtk4::Align::Start);
             summary_label.set_margin_top(8);
             summary_label.set_xalign(0.0);
+            if item.media_type.as_deref() == Some("artist") {
+                summary_label.set_lines(8);
+                summary_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            }
             container.append(&summary_label);
         }
     }
 
-    if !data.children.is_empty() {
+    if let Some(disco) = &data.artist_discography {
+        append_artist_sections(container, disco, &data.base_url, &data.token, state);
+    } else if !data.children.is_empty() {
         let children_title = match item.media_type.as_deref() {
             Some("show") => "Seasons",
             Some("season") => "Episodes",
@@ -287,10 +349,100 @@ fn build_detail_ui(
             crate::window::navigate_to_detail(&state_click, key, "detail");
         });
 
-        let grid = PosterGrid::new();
+        let grid = match item.media_type.as_deref() {
+            Some("season") => PosterGrid::new_landscape(),
+            Some("show") => PosterGrid::new(),
+            _ => PosterGrid::new(),
+        };
         grid.add_metadata_items_interactive(
             &data.children, &data.base_url, &data.token, on_click,
         );
+        container.append(&grid.widget);
+    }
+}
+
+fn append_artist_sections(
+    container: &GtkBox,
+    discography: &simplex_core::api::library::ArtistDiscography,
+    base_url: &str,
+    token: &str,
+    state: &Arc<Mutex<AppState>>,
+) {
+    if !discography.popular_tracks.is_empty() {
+        let popular_label = Label::new(Some("Popular"));
+        popular_label.add_css_class("title-2");
+        popular_label.set_halign(gtk4::Align::Start);
+        popular_label.set_margin_top(16);
+        container.append(&popular_label);
+
+        let popular_list = ListBox::new();
+        popular_list.set_selection_mode(gtk4::SelectionMode::None);
+        for track in &discography.popular_tracks {
+            let row = ListBoxRow::new();
+            let row_box = GtkBox::new(Orientation::Horizontal, 6);
+            row_box.set_margin_top(4);
+            row_box.set_margin_bottom(4);
+            row_box.set_margin_start(4);
+            row_box.set_margin_end(4);
+            row_box.append(&make_entity_link(&track.title, &track.rating_key, "detail", state.clone()));
+            if let Some(album_key) = &track.parent_rating_key {
+                let dot = Label::new(Some("•"));
+                dot.add_css_class("dim-label");
+                row_box.append(&dot);
+                let album_name = track.parent_title.as_deref().unwrap_or("Album");
+                row_box.append(&make_entity_link(album_name, album_key, "detail", state.clone()));
+            } else if let Some(album) = &track.parent_title {
+                let dim = Label::new(Some(&format!("• {}", album)));
+                dim.add_css_class("dim-label");
+                row_box.append(&dim);
+            }
+            let play_btn = Button::from_icon_name("media-playback-start-symbolic");
+            play_btn.add_css_class("flat");
+            play_btn.set_tooltip_text(Some("Play track"));
+            play_btn.set_halign(gtk4::Align::End);
+            row_box.append(&play_btn);
+            wire_play_button_for_item(
+                &play_btn,
+                track.clone(),
+                base_url.to_string(),
+                token.to_string(),
+                state.clone(),
+            );
+            row.set_child(Some(&row_box));
+            popular_list.append(&row);
+        }
+        container.append(&popular_list);
+    }
+
+    if !discography.albums.is_empty() {
+        let albums_label = Label::new(Some("Albums"));
+        albums_label.add_css_class("title-2");
+        albums_label.set_halign(gtk4::Align::Start);
+        albums_label.set_margin_top(16);
+        container.append(&albums_label);
+
+        let click = {
+            let state_click = state.clone();
+            Rc::new(move |key: &str| crate::window::navigate_to_detail(&state_click, key, "detail"))
+        };
+        let grid = PosterGrid::new_square();
+        grid.add_metadata_items_interactive(&discography.albums, base_url, token, click);
+        container.append(&grid.widget);
+    }
+
+    if !discography.eps_and_singles.is_empty() {
+        let eps_label = Label::new(Some("EPs & Singles"));
+        eps_label.add_css_class("title-2");
+        eps_label.set_halign(gtk4::Align::Start);
+        eps_label.set_margin_top(16);
+        container.append(&eps_label);
+
+        let click = {
+            let state_click = state.clone();
+            Rc::new(move |key: &str| crate::window::navigate_to_detail(&state_click, key, "detail"))
+        };
+        let grid = PosterGrid::new_square();
+        grid.add_metadata_items_interactive(&discography.eps_and_singles, base_url, token, click);
         container.append(&grid.widget);
     }
 }
@@ -312,4 +464,74 @@ fn capitalize(s: &str) -> String {
         None => String::new(),
         Some(c) => c.to_uppercase().to_string() + chars.as_str(),
     }
+}
+
+fn truncate_text(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    for c in text.chars().take(max_chars) {
+        out.push(c);
+    }
+    out.push_str("...");
+    out
+}
+
+fn wire_play_button_for_item(
+    button: &Button,
+    item: simplex_core::api::library::MetadataItem,
+    base_url: String,
+    token: String,
+    state: Arc<Mutex<AppState>>,
+) {
+    button.connect_clicked(move |_| {
+        if let Some(url) = simplex_core::api::transcode::playback_url_for_item(
+            &item,
+            &base_url,
+            &token,
+            "simplex-session",
+        ) {
+            crate::window::navigate_to_player(
+                &state,
+                &url,
+                &item.title,
+                Some(&item.rating_key),
+                None,
+            );
+            return;
+        }
+
+        // Fallback: fetch full metadata first, then try playback URL generation again.
+        let (tx, rx) = async_channel::unbounded();
+        let base_url_c = base_url.clone();
+        let token_c = token.clone();
+        let rating_key_c = item.rating_key.clone();
+        crate::app::runtime().spawn(async move {
+            let result = simplex_core::api::library::get_metadata(&base_url_c, &token_c, &rating_key_c).await;
+            let _ = tx.send(result).await;
+        });
+
+        let state_c = state.clone();
+        let base_url_ui = base_url.clone();
+        let token_ui = token.clone();
+        glib::spawn_future_local(async move {
+            if let Ok(Ok(full_item)) = rx.recv().await {
+                if let Some(url) = simplex_core::api::transcode::playback_url_for_item(
+                    &full_item,
+                    &base_url_ui,
+                    &token_ui,
+                    "simplex-session",
+                ) {
+                    crate::window::navigate_to_player(
+                        &state_c,
+                        &url,
+                        &full_item.title,
+                        Some(&full_item.rating_key),
+                        None,
+                    );
+                }
+            }
+        });
+    });
 }

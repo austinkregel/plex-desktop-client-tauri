@@ -73,6 +73,9 @@ pub async fn scrobble(base_url: &str, token: &str, rating_key: &str) -> Result<(
         .send()
         .await?
         .error_for_status()?;
+    crate::cache::invalidate_prefix(&format!("library:get_metadata:{base_url}:{rating_key}"));
+    crate::cache::invalidate_prefix(&format!("library:get_section_items_filtered:{base_url}:"));
+    crate::cache::invalidate_prefix(&format!("hubs:get_hubs:{base_url}"));
     Ok(())
 }
 
@@ -91,5 +94,8 @@ pub async fn unscrobble(base_url: &str, token: &str, rating_key: &str) -> Result
         .send()
         .await?
         .error_for_status()?;
+    crate::cache::invalidate_prefix(&format!("library:get_metadata:{base_url}:{rating_key}"));
+    crate::cache::invalidate_prefix(&format!("library:get_section_items_filtered:{base_url}:"));
+    crate::cache::invalidate_prefix(&format!("hubs:get_hubs:{base_url}"));
     Ok(())
 }

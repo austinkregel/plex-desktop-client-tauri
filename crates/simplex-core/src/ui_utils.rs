@@ -44,6 +44,9 @@ pub fn format_time(seconds: f64) -> String {
 /// Standard poster card dimensions (2:3 aspect ratio).
 pub const CARD_WIDTH: i32 = 180;
 pub const POSTER_HEIGHT: i32 = 270;
+pub const SQUARE_CARD_SIZE: i32 = 180;
+pub const LANDSCAPE_CARD_WIDTH: i32 = 240;
+pub const LANDSCAPE_CARD_HEIGHT: i32 = 135;
 
 /// Pixels beyond the viewport edge to preload images.
 pub const VIEWPORT_MARGIN: f64 = 400.0;

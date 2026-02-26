@@ -162,6 +162,16 @@ fn stop_and_leave(
     crate::window::leave_player(state);
 }
 
+fn collapse_to_main(
+    state: &Arc<Mutex<AppState>>,
+    pip_window: &Rc<RefCell<Option<PipWindow>>>,
+) {
+    if let Some(ref pw) = *pip_window.borrow() {
+        pw.hide();
+    }
+    crate::window::collapse_player(state);
+}
+
 /// Fetch metadata for the currently playing item and update the controls.
 fn fetch_and_display_metadata(
     state: &Arc<Mutex<AppState>>,
@@ -456,13 +466,9 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
             // Back button -> stop and leave
             {
                 let s = state_c.clone();
-                let pl = pipeline_c.clone();
-                let ti = timer_c.clone();
-                let lu = last_uri_c.clone();
                 let pw = pip_c.clone();
-                let completion = completion_scrobbled_c.clone();
                 ctrl.back_button.connect_clicked(move |_| {
-                    stop_and_leave(&s, &pl, &ti, &lu, &pw, &completion);
+                    collapse_to_main(&s, &pw);
                 });
             }
 
@@ -626,6 +632,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                     let mut s = state_close.lock().unwrap();
                     s.playback_uri = None;
                     s.playback_rating_key = None;
+                    s.playback_pipeline = None;
                 });
 
                 let state_return = state_pip.clone();
@@ -650,6 +657,9 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
 
             *controls_c.borrow_mut() = Some(ctrl);
             *pipeline_c.borrow_mut() = Some(pipe);
+            if let Some(ref active_pipe) = *pipeline_c.borrow() {
+                state_c.lock().unwrap().playback_pipeline = Some(active_pipe.clone());
+            }
         }
 
         if let Some(ref pipe) = *pipeline_c.borrow() {
@@ -768,10 +778,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
     let pipeline_key = pipeline.clone();
     let controls_key = controls.clone();
     let state_key = state.clone();
-    let timer_key = timer_id.clone();
-    let last_uri_key = last_uri.clone();
     let pip_key = pip_window.clone();
-    let completion_key = completion_scrobbled.clone();
     key_controller.connect_key_pressed(move |_, keyval, _, _| {
         use gtk4::gdk::Key;
         match keyval {
@@ -796,14 +803,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                 glib::Propagation::Stop
             }
             k if k == Key::Escape => {
-                stop_and_leave(
-                    &state_key,
-                    &pipeline_key,
-                    &timer_key,
-                    &last_uri_key,
-                    &pip_key,
-                    &completion_key,
-                );
+                collapse_to_main(&state_key, &pip_key);
                 glib::Propagation::Stop
             }
             k if k == Key::F11 => {

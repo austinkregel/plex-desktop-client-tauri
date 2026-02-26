@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use super::library::MetadataItem;
+use crate::cache::{self, CachePolicy};
+
+const HUBS_TTL: CachePolicy = CachePolicy { ttl_secs: 60 };
 
 #[derive(Debug, Error)]
 pub enum HubError {
@@ -34,10 +37,17 @@ pub struct Hub {
 
 /// Get hubs (continue watching, recently added, on deck, etc.)
 pub async fn get_hubs(base_url: &str, token: &str) -> Result<Vec<Hub>, HubError> {
+    let key = format!("hubs:get_hubs:{base_url}");
+    if let Some(cached) = cache::get::<Vec<Hub>>(&key, HUBS_TTL) {
+        return Ok(cached);
+    }
+
     let client = super::plex_client(token)?;
     let url = format!("{}/hubs", base_url.trim_end_matches('/'));
     let resp: HubsResponse = client.get(&url).send().await?.json().await?;
-    Ok(resp.media_container.hubs)
+    let hubs = resp.media_container.hubs;
+    cache::set(&key, &hubs);
+    Ok(hubs)
 }
 
 /// Get continue watching hub specifically.
@@ -100,6 +110,7 @@ mod tests {
                 media_type: None,
                 summary: None,
                 year: None,
+                originally_available_at: None,
                 thumb: None,
                 art: None,
                 parent_thumb: None,
@@ -108,6 +119,12 @@ mod tests {
                 added_at: None,
                 updated_at: None,
                 view_count: None,
+                rating: None,
+                audience_rating: None,
+                user_rating: None,
+                album_type: None,
+                parent_year: None,
+                last_viewed_at: None,
                 view_offset: None,
                 parent_rating_key: None,
                 grandparent_rating_key: None,
@@ -204,6 +221,7 @@ mod tests {
                 media_type: None,
                 summary: None,
                 year: None,
+                originally_available_at: None,
                 thumb: None,
                 art: None,
                 parent_thumb: None,
@@ -212,6 +230,12 @@ mod tests {
                 added_at: None,
                 updated_at: None,
                 view_count: None,
+                rating: None,
+                audience_rating: None,
+                user_rating: None,
+                album_type: None,
+                parent_year: None,
+                last_viewed_at: None,
                 view_offset: None,
                 parent_rating_key: None,
                 grandparent_rating_key: None,

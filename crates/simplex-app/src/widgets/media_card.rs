@@ -11,7 +11,27 @@ fn download_semaphore() -> &'static Semaphore {
     DOWNLOAD_SEMAPHORE.get_or_init(|| Semaphore::new(6))
 }
 
-use simplex_core::ui_utils::{CARD_WIDTH, POSTER_HEIGHT, VIEWPORT_MARGIN};
+use simplex_core::ui_utils::{
+    CARD_WIDTH, LANDSCAPE_CARD_HEIGHT, LANDSCAPE_CARD_WIDTH, POSTER_HEIGHT, SQUARE_CARD_SIZE,
+    VIEWPORT_MARGIN,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaCardStyle {
+    Poster,
+    Square,
+    Landscape,
+}
+
+impl MediaCardStyle {
+    fn dimensions(self) -> (i32, i32) {
+        match self {
+            Self::Poster => (CARD_WIDTH, POSTER_HEIGHT),
+            Self::Square => (SQUARE_CARD_SIZE, SQUARE_CARD_SIZE),
+            Self::Landscape => (LANDSCAPE_CARD_WIDTH, LANDSCAPE_CARD_HEIGHT),
+        }
+    }
+}
 
 pub struct MediaCard {
     pub widget: GtkBox,
@@ -19,8 +39,18 @@ pub struct MediaCard {
 
 impl MediaCard {
     pub fn new(title: &str, subtitle: Option<&str>, thumb_url: Option<&str>) -> Self {
+        Self::new_with_style(title, subtitle, thumb_url, MediaCardStyle::Poster)
+    }
+
+    pub fn new_with_style(
+        title: &str,
+        subtitle: Option<&str>,
+        thumb_url: Option<&str>,
+        style: MediaCardStyle,
+    ) -> Self {
         let card_box = GtkBox::new(Orientation::Vertical, 4);
-        card_box.set_width_request(CARD_WIDTH);
+        let (card_w, card_h) = style.dimensions();
+        card_box.set_width_request(card_w);
         card_box.add_css_class("card");
         card_box.set_margin_start(4);
         card_box.set_margin_end(4);
@@ -30,7 +60,7 @@ impl MediaCard {
         let poster = Overlay::new();
         poster.set_overflow(gtk4::Overflow::Hidden);
         let sizer = GtkBox::new(Orientation::Vertical, 0);
-        sizer.set_size_request(CARD_WIDTH, POSTER_HEIGHT);
+        sizer.set_size_request(card_w, card_h);
         sizer.add_css_class("poster-placeholder");
         poster.set_child(Some(&sizer));
 

@@ -4,15 +4,28 @@ use std::rc::Rc;
 
 use simplex_core::api::library::MetadataItem;
 
-use super::media_card::MediaCard;
+use super::media_card::{MediaCard, MediaCardStyle};
 
 #[derive(Clone)]
 pub struct PosterGrid {
     pub widget: FlowBox,
+    style: MediaCardStyle,
 }
 
 impl PosterGrid {
     pub fn new() -> Self {
+        Self::new_with_style(MediaCardStyle::Poster)
+    }
+
+    pub fn new_square() -> Self {
+        Self::new_with_style(MediaCardStyle::Square)
+    }
+
+    pub fn new_landscape() -> Self {
+        Self::new_with_style(MediaCardStyle::Landscape)
+    }
+
+    pub fn new_with_style(style: MediaCardStyle) -> Self {
         let flow_box = FlowBox::new();
         flow_box.set_homogeneous(false);
         flow_box.set_min_children_per_line(2);
@@ -22,12 +35,12 @@ impl PosterGrid {
         flow_box.set_column_spacing(8);
         flow_box.set_row_spacing(8);
 
-        Self { widget: flow_box }
+        Self { widget: flow_box, style }
     }
 
     /// Add a single card (no click handling).
     pub fn add_entry(&self, title: &str, subtitle: Option<&str>, thumb_url: Option<&str>) {
-        let card = MediaCard::new(title, subtitle, thumb_url);
+        let card = MediaCard::new_with_style(title, subtitle, thumb_url, self.style);
         self.widget.append(&card.widget);
     }
 
@@ -40,7 +53,7 @@ impl PosterGrid {
         rating_key: &str,
         on_click: &Rc<dyn Fn(&str)>,
     ) {
-        let card = MediaCard::new(title, subtitle, thumb_url);
+        let card = MediaCard::new_with_style(title, subtitle, thumb_url, self.style);
         let key = rating_key.to_string();
         let cb = on_click.clone();
         let gesture = gtk4::GestureClick::new();

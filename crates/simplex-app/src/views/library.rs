@@ -147,12 +147,24 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
         let controls_sel = controls.clone();
         let grid_sel = grid_area.clone();
         let current_sel = current_section_key.clone();
+        let sections_sel = sections.clone();
         section_list.connect_row_selected(move |_, row| {
             if let Some(row) = row {
                 let key = row.widget_name().to_string();
                 *current_sel.borrow_mut() = Some(key.clone());
                 let filter = controls_sel.current_filter();
-                load_section_items(&state_sel, &grid_sel, &key, &filter);
+                let section_type = sections_sel
+                    .borrow()
+                    .iter()
+                    .find(|s| s.key == key)
+                    .map(|s| s.section_type.clone());
+                load_section_items(
+                    &state_sel,
+                    &grid_sel,
+                    &key,
+                    &filter,
+                    section_type.as_deref(),
+                );
             }
         });
     }
@@ -164,16 +176,23 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
         let grid_filter = grid_area.clone();
         let current_filter = current_section_key.clone();
         let suppress = suppress_filter_events.clone();
+        let sections_filter = sections.clone();
         move || {
             if suppress.get() {
                 return;
             }
             if let Some(section_key) = current_filter.borrow().clone() {
+                let section_type = sections_filter
+                    .borrow()
+                    .iter()
+                    .find(|s| s.key == section_key)
+                    .map(|s| s.section_type.clone());
                 load_section_items(
                     &state_filter,
                     &grid_filter,
                     &section_key,
                     &controls_filter.current_filter(),
+                    section_type.as_deref(),
                 );
             }
         }
@@ -434,6 +453,7 @@ fn load_section_items(
     grid_area: &GtkBox,
     section_key: &str,
     filter: &LibraryFilter,
+    section_type: Option<&str>,
 ) {
     while let Some(child) = grid_area.first_child() {
         grid_area.remove(&child);
@@ -455,9 +475,14 @@ fn load_section_items(
     };
 
     let key = section_key.to_string();
+    let section_type = section_type.unwrap_or("movie").to_string();
     let filter_owned = filter.clone();
-    let (tx, rx) =
-        async_channel::unbounded::<(Vec<simplex_core::api::library::MetadataItem>, String, String)>();
+    let (tx, rx) = async_channel::unbounded::<(
+        Vec<simplex_core::api::library::MetadataItem>,
+        String,
+        String,
+        String,
+    )>();
 
     let bu = base_url.clone();
     let tk = token.clone();
@@ -466,7 +491,7 @@ fn load_section_items(
             .await
         {
             Ok(items) => {
-                let _ = tx.send((items, bu, tk)).await;
+                let _ = tx.send((items, bu, tk, section_type)).await;
             }
             Err(e) => tracing::warn!("Failed to load section items: {e}"),
         }
@@ -476,14 +501,63 @@ fn load_section_items(
     let spin = spinner.clone();
     let state_click = state.clone();
     glib::spawn_future_local(async move {
-        if let Ok((items, base_url, token)) = rx.recv().await {
+        if let Ok((items, base_url, token, section_type)) = rx.recv().await {
             spin.set_visible(false);
-            let on_click: Rc<dyn Fn(&str)> = Rc::new(move |key: &str| {
-                crate::window::navigate_to_detail(&state_click, key, "library");
-            });
-            let poster_grid = PosterGrid::new();
-            poster_grid.add_metadata_items_interactive(&items, &base_url, &token, on_click);
-            grid.append(&poster_grid.widget);
+            match section_type.as_str() {
+                "show" => render_show_layout(&grid, &items, &base_url, &token, state_click.clone()),
+                "artist" => render_music_layout(&grid, &items, &base_url, &token, state_click.clone()),
+                _ => render_movie_layout(&grid, &items, &base_url, &token, state_click.clone()),
+            }
         }
     });
+}
+
+fn render_movie_layout(
+    grid: &GtkBox,
+    items: &[simplex_core::api::library::MetadataItem],
+    base_url: &str,
+    token: &str,
+    state: Arc<Mutex<AppState>>,
+) {
+    let on_click: Rc<dyn Fn(&str)> = Rc::new(move |key: &str| {
+        crate::window::navigate_to_detail(&state, key, "library");
+    });
+    let poster_grid = PosterGrid::new();
+    poster_grid.add_metadata_items_interactive(items, base_url, token, on_click);
+    grid.append(&poster_grid.widget);
+}
+
+fn render_show_layout(
+    grid: &GtkBox,
+    items: &[simplex_core::api::library::MetadataItem],
+    base_url: &str,
+    token: &str,
+    state: Arc<Mutex<AppState>>,
+) {
+    let on_click: Rc<dyn Fn(&str)> = Rc::new(move |key: &str| {
+        crate::window::navigate_to_detail(&state, key, "library");
+    });
+    let show_grid = PosterGrid::new();
+    show_grid.add_metadata_items_interactive(items, base_url, token, on_click);
+    grid.append(&show_grid.widget);
+}
+
+fn render_music_layout(
+    grid: &GtkBox,
+    items: &[simplex_core::api::library::MetadataItem],
+    base_url: &str,
+    token: &str,
+    state: Arc<Mutex<AppState>>,
+) {
+    let section_label = Label::new(Some("Artists"));
+    section_label.add_css_class("title-2");
+    section_label.set_halign(gtk4::Align::Start);
+    grid.append(&section_label);
+
+    let on_click: Rc<dyn Fn(&str)> = Rc::new(move |key: &str| {
+        crate::window::navigate_to_detail(&state, key, "library");
+    });
+    let music_grid = PosterGrid::new_square();
+    music_grid.add_metadata_items_interactive(items, base_url, token, on_click);
+    grid.append(&music_grid.widget);
 }

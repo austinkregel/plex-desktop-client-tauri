@@ -1,4 +1,5 @@
 pub mod api;
+pub mod cache;
 pub mod config;
 pub mod deep_links;
 pub mod discovery;

@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use crate::cache::{self, CachePolicy};
+
+const SECTIONS_TTL: CachePolicy = CachePolicy { ttl_secs: 300 };
+const SECTION_ITEMS_TTL: CachePolicy = CachePolicy { ttl_secs: 90 };
+const METADATA_TTL: CachePolicy = CachePolicy { ttl_secs: 120 };
+const CHILDREN_TTL: CachePolicy = CachePolicy { ttl_secs: 120 };
+const FILTER_OPTIONS_TTL: CachePolicy = CachePolicy { ttl_secs: 600 };
 
 #[derive(Debug, Error)]
 pub enum LibraryError {
@@ -96,7 +103,7 @@ pub struct FilterOption {
     pub title: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LibraryFilter {
     pub genre: Option<String>,
     pub year: Option<String>,
@@ -127,6 +134,8 @@ pub struct MetadataItem {
     pub media_type: Option<String>,
     pub summary: Option<String>,
     pub year: Option<u32>,
+    #[serde(rename = "originallyAvailableAt")]
+    pub originally_available_at: Option<String>,
     pub thumb: Option<String>,
     pub art: Option<String>,
     #[serde(rename = "parentThumb")]
@@ -140,6 +149,18 @@ pub struct MetadataItem {
     pub updated_at: Option<u64>,
     #[serde(rename = "viewCount")]
     pub view_count: Option<u32>,
+    #[serde(rename = "rating")]
+    pub rating: Option<f32>,
+    #[serde(rename = "audienceRating")]
+    pub audience_rating: Option<f32>,
+    #[serde(rename = "userRating")]
+    pub user_rating: Option<f32>,
+    #[serde(rename = "albumType")]
+    pub album_type: Option<String>,
+    #[serde(rename = "parentYear")]
+    pub parent_year: Option<u32>,
+    #[serde(rename = "lastViewedAt")]
+    pub last_viewed_at: Option<u64>,
     #[serde(rename = "viewOffset")]
     pub view_offset: Option<u64>,
     #[serde(rename = "parentRatingKey")]
@@ -246,10 +267,17 @@ pub struct MediaStream {
 
 /// Get all library sections (Movies, TV Shows, Music, etc.)
 pub async fn get_sections(base_url: &str, token: &str) -> Result<Vec<LibrarySection>, LibraryError> {
+    let key = format!("library:get_sections:{base_url}");
+    if let Some(cached) = cache::get::<Vec<LibrarySection>>(&key, SECTIONS_TTL) {
+        return Ok(cached);
+    }
+
     let client = super::plex_client(token)?;
     let url = format!("{}/library/sections", base_url.trim_end_matches('/'));
     let resp: MediaContainer<LibrarySection> = client.get(&url).send().await?.json().await?;
-    Ok(resp.media_container.directory)
+    let sections = resp.media_container.directory;
+    cache::set(&key, &sections);
+    Ok(sections)
 }
 
 /// Get all items in a library section.
@@ -290,6 +318,11 @@ pub async fn get_section_items_filtered(
     section_key: &str,
     filter: &LibraryFilter,
 ) -> Result<Vec<MetadataItem>, LibraryError> {
+    let key = format!("library:get_section_items_filtered:{base_url}:{section_key}:{}", serde_json::to_string(filter).unwrap_or_default());
+    if let Some(cached) = cache::get::<Vec<MetadataItem>>(&key, SECTION_ITEMS_TTL) {
+        return Ok(cached);
+    }
+
     let client = super::plex_client(token)?;
     let url = format!("{}/library/sections/{}/all", base_url.trim_end_matches('/'), section_key);
     let query = build_library_filter_query(filter);
@@ -298,7 +331,9 @@ pub async fn get_section_items_filtered(
         req = req.query(&query);
     }
     let resp: MediaContainer<MetadataItem> = req.send().await?.json().await?;
-    Ok(resp.media_container.metadata)
+    let items = resp.media_container.metadata;
+    cache::set(&key, &items);
+    Ok(items)
 }
 
 /// Fetch filter values for a section (e.g. genre, year, contentRating, resolution, language).
@@ -308,6 +343,11 @@ pub async fn get_filter_options(
     section_key: &str,
     filter_type: &str,
 ) -> Result<Vec<FilterOption>, LibraryError> {
+    let key = format!("library:get_filter_options:{base_url}:{section_key}:{filter_type}");
+    if let Some(cached) = cache::get::<Vec<FilterOption>>(&key, FILTER_OPTIONS_TTL) {
+        return Ok(cached);
+    }
+
     let client = super::plex_client(token)?;
     let url = format!(
         "{}/library/sections/{}/{}",
@@ -316,24 +356,40 @@ pub async fn get_filter_options(
         filter_type
     );
     let resp: MediaContainer<FilterOption> = client.get(&url).send().await?.json().await?;
-    Ok(resp.media_container.directory)
+    let options = resp.media_container.directory;
+    cache::set(&key, &options);
+    Ok(options)
 }
 
 /// Get metadata for a specific item.
 pub async fn get_metadata(base_url: &str, token: &str, rating_key: &str) -> Result<MetadataItem, LibraryError> {
+    let key = format!("library:get_metadata:{base_url}:{rating_key}");
+    if let Some(cached) = cache::get::<MetadataItem>(&key, METADATA_TTL) {
+        return Ok(cached);
+    }
+
     let client = super::plex_client(token)?;
     let url = format!("{}/library/metadata/{}", base_url.trim_end_matches('/'), rating_key);
     let resp: MediaContainer<MetadataItem> = client.get(&url).send().await?.json().await?;
-    resp.media_container.metadata.into_iter().next()
-        .ok_or_else(|| LibraryError::Parse("No metadata found".to_string()))
+    let item = resp.media_container.metadata.into_iter().next()
+        .ok_or_else(|| LibraryError::Parse("No metadata found".to_string()))?;
+    cache::set(&key, &item);
+    Ok(item)
 }
 
 /// Get children of an item (seasons for a show, episodes for a season).
 pub async fn get_children(base_url: &str, token: &str, rating_key: &str) -> Result<Vec<MetadataItem>, LibraryError> {
+    let key = format!("library:get_children:{base_url}:{rating_key}");
+    if let Some(cached) = cache::get::<Vec<MetadataItem>>(&key, CHILDREN_TTL) {
+        return Ok(cached);
+    }
+
     let client = super::plex_client(token)?;
     let url = format!("{}/library/metadata/{}/children", base_url.trim_end_matches('/'), rating_key);
     let resp: MediaContainer<MetadataItem> = client.get(&url).send().await?.json().await?;
-    Ok(resp.media_container.metadata)
+    let items = resp.media_container.metadata;
+    cache::set(&key, &items);
+    Ok(items)
 }
 
 /// Get collections in a library section.
@@ -389,6 +445,81 @@ pub async fn get_adjacent_episodes(
 /// Build the thumbnail URL for an item.
 pub fn thumb_url(base_url: &str, token: &str, thumb_path: &str) -> String {
     format!("{}{}?X-Plex-Token={}", base_url.trim_end_matches('/'), thumb_path, token)
+}
+
+#[derive(Debug, Clone)]
+pub struct ArtistDiscography {
+    pub popular_tracks: Vec<MetadataItem>,
+    pub albums: Vec<MetadataItem>,
+    pub eps_and_singles: Vec<MetadataItem>,
+}
+
+fn sort_popular_tracks(mut tracks: Vec<MetadataItem>) -> Vec<MetadataItem> {
+    tracks.sort_by(|a, b| {
+        let a_score = a.user_rating.or(a.audience_rating).or(a.rating).unwrap_or(0.0);
+        let b_score = b.user_rating.or(b.audience_rating).or(b.rating).unwrap_or(0.0);
+        b_score
+            .partial_cmp(&a_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.view_count.unwrap_or(0).cmp(&a.view_count.unwrap_or(0)))
+    });
+    tracks
+}
+
+fn split_discography_items(mut items: Vec<MetadataItem>) -> (Vec<MetadataItem>, Vec<MetadataItem>) {
+    items.retain(|i| i.media_type.as_deref() == Some("album"));
+    let mut albums = Vec::new();
+    let mut eps_and_singles = Vec::new();
+    for album in items {
+        let album_kind = album.album_type.clone().unwrap_or_default().to_lowercase();
+        if album_kind.contains("ep") || album_kind.contains("single") {
+            eps_and_singles.push(album);
+        } else {
+            albums.push(album);
+        }
+    }
+
+    albums.sort_by(|a, b| {
+        a.year
+            .or(a.parent_year)
+            .unwrap_or(0)
+            .cmp(&b.year.or(b.parent_year).unwrap_or(0))
+            .then_with(|| a.title.cmp(&b.title))
+    });
+    eps_and_singles.sort_by(|a, b| {
+        a.year
+            .or(a.parent_year)
+            .unwrap_or(0)
+            .cmp(&b.year.or(b.parent_year).unwrap_or(0))
+            .then_with(|| a.title.cmp(&b.title))
+    });
+
+    (albums, eps_and_singles)
+}
+
+pub async fn get_artist_discography(
+    base_url: &str,
+    token: &str,
+    artist_rating_key: &str,
+) -> Result<ArtistDiscography, LibraryError> {
+    let artist_children = get_children(base_url, token, artist_rating_key).await?;
+    let mut all_tracks = Vec::new();
+    for album in &artist_children {
+        if album.media_type.as_deref() == Some("album") {
+            let mut tracks = get_children(base_url, token, &album.rating_key).await.unwrap_or_default();
+            all_tracks.append(&mut tracks);
+        }
+    }
+
+    let mut popular_tracks = sort_popular_tracks(all_tracks.clone());
+    popular_tracks.truncate(10);
+    let (albums, eps_and_singles) = split_discography_items(artist_children);
+
+    Ok(ArtistDiscography {
+        popular_tracks,
+        albums,
+        eps_and_singles,
+    })
 }
 
 #[cfg(test)]
@@ -549,6 +680,7 @@ mod tests {
             media_type: None,
             summary: None,
             year: None,
+            originally_available_at: None,
             thumb: None,
             art: None,
             parent_thumb: None,
@@ -557,6 +689,12 @@ mod tests {
             added_at: None,
             updated_at: None,
             view_count: None,
+            rating: None,
+            audience_rating: None,
+            user_rating: None,
+            album_type: None,
+            parent_year: None,
+            last_viewed_at: None,
             view_offset: None,
             parent_rating_key: None,
             grandparent_rating_key: None,
@@ -728,6 +866,59 @@ mod tests {
             i.key = format!("/library/metadata/{}", rk);
             i.title = title.into();
         })
+    }
+
+    #[test]
+    fn test_sort_popular_tracks_prefers_rating_then_views() {
+        let a = make_item(|i| {
+            i.rating_key = "a".into();
+            i.user_rating = Some(7.0);
+            i.view_count = Some(100);
+        });
+        let b = make_item(|i| {
+            i.rating_key = "b".into();
+            i.user_rating = Some(9.0);
+            i.view_count = Some(5);
+        });
+        let c = make_item(|i| {
+            i.rating_key = "c".into();
+            i.user_rating = Some(7.0);
+            i.view_count = Some(300);
+        });
+        let sorted = sort_popular_tracks(vec![a, b, c]);
+        assert_eq!(sorted[0].rating_key, "b");
+        assert_eq!(sorted[1].rating_key, "c");
+        assert_eq!(sorted[2].rating_key, "a");
+    }
+
+    #[test]
+    fn test_split_discography_items_groups_and_orders() {
+        let album = make_item(|i| {
+            i.rating_key = "album".into();
+            i.title = "Main Album".into();
+            i.media_type = Some("album".into());
+            i.year = Some(2020);
+        });
+        let ep = make_item(|i| {
+            i.rating_key = "ep".into();
+            i.title = "EP One".into();
+            i.media_type = Some("album".into());
+            i.album_type = Some("ep".into());
+            i.year = Some(2019);
+        });
+        let single = make_item(|i| {
+            i.rating_key = "single".into();
+            i.title = "Single One".into();
+            i.media_type = Some("album".into());
+            i.album_type = Some("single".into());
+            i.year = Some(2022);
+        });
+        let (albums, eps_singles) = split_discography_items(vec![single, album, ep]);
+        assert_eq!(albums.len(), 1);
+        assert_eq!(albums[0].rating_key, "album");
+        assert_eq!(eps_singles.len(), 2);
+        assert_eq!(eps_singles[0].rating_key, "ep");
+        assert_eq!(eps_singles[1].rating_key, "single");
     }
 
     #[test]

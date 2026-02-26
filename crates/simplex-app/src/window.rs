@@ -1,6 +1,5 @@
 use gtk4::prelude::*;
 use gtk4::{Box as GtkBox, Orientation};
-use libadwaita::prelude::*;
 use libadwaita::{
     Application, ApplicationWindow, HeaderBar, NavigationPage, NavigationSplitView, ViewStack,
 };
@@ -8,6 +7,7 @@ use simplex_core::config;
 use simplex_core::models::ServerConfig;
 use std::sync::{Arc, Mutex};
 
+use crate::player::pipeline::PlayerPipeline;
 use crate::views;
 use crate::widgets;
 
@@ -33,6 +33,8 @@ pub struct AppState {
     pub playback_offset: Option<f64>,
     /// Section key selected for library view (used by pinned library shortcuts).
     pub selected_library_key: Option<String>,
+    /// Active shared playback pipeline used by full and mini player controls.
+    pub playback_pipeline: Option<Arc<Mutex<PlayerPipeline>>>,
 }
 
 impl AppState {
@@ -70,6 +72,7 @@ impl AppState {
             playback_rating_key: None,
             playback_offset: None,
             selected_library_key: None,
+            playback_pipeline: None,
         }
     }
 
@@ -172,14 +175,24 @@ pub fn return_to_player(state: &Arc<Mutex<AppState>>) {
     }
 }
 
+/// Collapse from full player back to app chrome while keeping playback alive.
+pub fn collapse_player(state: &Arc<Mutex<AppState>>) {
+    restore_chrome(state);
+}
+
+/// Stop active playback and clear session state.
+pub fn stop_playback_session(state: &Arc<Mutex<AppState>>) {
+    let mut s = state.lock().unwrap();
+    s.playback_uri = None;
+    s.playback_title = None;
+    s.playback_rating_key = None;
+    s.playback_offset = None;
+    s.playback_pipeline = None;
+}
+
 /// Fully leave the player: restore chrome and clear playback state.
 pub fn leave_player(state: &Arc<Mutex<AppState>>) {
-    {
-        let mut s = state.lock().unwrap();
-        s.playback_uri = None;
-        s.playback_rating_key = None;
-        s.playback_offset = None;
-    }
+    stop_playback_session(state);
     restore_chrome(state);
 }
 
@@ -237,8 +250,10 @@ pub fn build_window(app: &Application) {
 
     let content_box = GtkBox::new(Orientation::Vertical, 0);
     let header = HeaderBar::new();
+    let mini_player = widgets::mini_player::build(state.clone());
     content_box.append(&header);
     content_box.append(&view_stack);
+    content_box.append(&mini_player);
 
     let content_page = NavigationPage::builder()
         .child(&content_box)

@@ -8,6 +8,7 @@
 use gdk4::prelude::*;
 use gtk4::prelude::*;
 use gtk4::{Button, Overlay, Picture, Revealer, RevealerTransitionType, Window, WindowHandle};
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -99,12 +100,17 @@ impl PipWindow {
         let on_return: Arc<Mutex<Option<Box<dyn Fn() + 'static>>>> =
             Arc::new(Mutex::new(None));
 
+        let suppress_close_for_return = Rc::new(Cell::new(false));
         let win_return = window.clone();
         let cb_return = on_return.clone();
+        let suppress_return = suppress_close_for_return.clone();
         return_btn.connect_clicked(move |_| {
             if let Some(ref f) = *cb_return.lock().unwrap() {
                 f();
             }
+            // Returning to the main player should not be treated as a hard-close
+            // that stops playback.
+            suppress_return.set(true);
             win_return.close();
         });
 
@@ -136,8 +142,11 @@ impl PipWindow {
             Arc::new(Mutex::new(None));
 
         let cb = on_close.clone();
+        let suppress_close = suppress_close_for_return.clone();
         window.connect_close_request(move |_| {
-            if let Some(ref f) = *cb.lock().unwrap() {
+            if suppress_close.get() {
+                suppress_close.set(false);
+            } else if let Some(ref f) = *cb.lock().unwrap() {
                 f();
             }
             glib::Propagation::Proceed
@@ -157,7 +166,11 @@ impl PipWindow {
             }
         });
 
-        Self { window, on_close, on_return }
+        Self {
+            window,
+            on_close,
+            on_return,
+        }
     }
 
     /// Register a callback invoked when the PiP window is closed.
@@ -175,7 +188,8 @@ impl PipWindow {
     }
 
     pub fn hide(&self) {
-        self.window.close();
+        // Hide without invoking the close callback that tears down playback.
+        self.window.set_visible(false);
     }
 
     pub fn is_visible(&self) -> bool {
