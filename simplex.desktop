@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Simplex
+Comment=Native media client for Plex servers
+Exec=simplex %u
+Icon=simplex
+Type=Application
+Categories=AudioVideo;Video;Player;
+MimeType=x-scheme-handler/simplex;
+StartupNotify=true
+NoDisplay=false

@@ -88,3 +88,6 @@ To modify which platforms are built or which artifacts are uploaded, edit `.gith
 - Modify the `files` section in upload steps to include/exclude specific artifacts
 - Adjust build arguments in the `npm run tauri build` commands
 
+
+
+

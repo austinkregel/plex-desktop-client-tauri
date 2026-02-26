@@ -15,13 +15,61 @@ use std::os::unix::net::{UnixListener, UnixStream};
 #[cfg(windows)]
 use std::net::{TcpListener, TcpStream};
 
+fn apply_hwaccel_overrides_from_env() {
+    // This app is a Tauri webview wrapper (WebKitGTK on Linux, WebView2 on Windows).
+    // "Hardware acceleration" is primarily controlled by the OS webview + system drivers.
+    //
+    // We provide an opt-in env toggle for users who want to override common "software rendering"
+    // env vars, or force WebView2 to ignore the GPU blocklist.
+    let enabled = std::env::var("PLEX_DESKTOP_FORCE_HWACCEL")
+        .ok()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"))
+        .unwrap_or(false);
+
+    if !enabled {
+        return;
+    }
+
+    // Linux / WebKitGTK: remove env vars that commonly force software rendering or disable
+    // accelerated compositing.
+    #[cfg(target_os = "linux")]
+    {
+        // Force software OpenGL rendering if set to 1
+        std::env::remove_var("LIBGL_ALWAYS_SOFTWARE");
+        // Sometimes used to force llvmpipe
+        std::env::remove_var("GALLIUM_DRIVER");
+        // WebKitGTK accelerated compositing disable knob (if present)
+        std::env::remove_var("WEBKIT_DISABLE_COMPOSITING_MODE");
+        // Disable DMA-BUF renderer (can disable some GPU paths on Wayland/modern stacks)
+        std::env::remove_var("WEBKIT_DISABLE_DMABUF_RENDERER");
+    }
+
+    // Windows / WebView2: add Chromium args that typically help when GPU is blocklisted.
+    // Docs: WebView2 supports the WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS env var.
+    #[cfg(windows)]
+    {
+        const EXTRA: &str = "--ignore-gpu-blocklist";
+        let current = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
+        if current.contains("ignore-gpu-blocklist") {
+            return;
+        }
+
+        let combined = if current.trim().is_empty() {
+            EXTRA.to_string()
+        } else {
+            format!("{} {}", current.trim(), EXTRA)
+        };
+        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", combined);
+    }
+}
+
 // HIGH-001: Keychain service name for token storage
 const KEYCHAIN_SERVICE: &str = "plex-desktop";
 const KEYCHAIN_USERNAME: &str = "auth-token";
 
 // MED-004: Whitelist of allowed query parameter names for deep links
 // These are parameters that Plex web UI commonly uses and are safe to pass through
-const ALLOWED_QUERY_PARAMS: &[&str] = &[
+const ALLOWED_QUERY_PARAMS: [&str; 9] = [
     "context",
     "source",
     "includeMeta",
@@ -748,8 +796,7 @@ fn migrate_token_from_config() -> Result<(), String> {
     if let Some(token) = config.auth_token {
         // Check if token already exists in keychain
         let keychain_has_token = match get_token_from_keychain() {
-            Ok(Some(_)) => true,
-            Ok(None) => false,
+            Ok(token_opt) => token_opt.is_some(),
             Err(e) => {
                 eprintln!("Warning: Failed to check keychain during migration: {}", e);
                 // If we can't check keychain, try to migrate anyway (will overwrite if exists)
@@ -792,20 +839,15 @@ fn migrate_token_from_config() -> Result<(), String> {
 #[tauri::command]
 fn get_auth_token() -> Result<Option<String>, String> {
     // HIGH-001: Try keychain first
-    match get_token_from_keychain() {
-        Ok(Some(token)) => Ok(Some(token)),
-        Ok(None) => {
-            // Token not in keychain, try migration from config (non-blocking)
-            let _ = migrate_token_from_config();
-            // Try keychain again after migration attempt
-            get_token_from_keychain()
-        }
-        Err(e) => {
-            // If keychain fails, try migration as fallback
-            let _ = migrate_token_from_config();
-            get_token_from_keychain()
-        }
+    let token = get_token_from_keychain().unwrap_or(None);
+    if token.is_some() {
+        return Ok(token);
     }
+
+    // Token not in keychain (or keychain failed). Try migrating from config (non-blocking),
+    // then attempt keychain again.
+    let _ = migrate_token_from_config();
+    get_token_from_keychain()
 }
 
 #[tauri::command]
@@ -866,6 +908,7 @@ fn set_device_settings(settings: serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 fn is_oauth_url(url: &str) -> bool {
     url.contains("plex.tv/auth")
         || url.contains("plex.tv/login")
@@ -1841,6 +1884,34 @@ fn parse_deep_link(
     Err("Unable to parse deep link format".to_string())
 }
 
+/// Extract a fully-qualified Plex web URL from a `plex-desktop://` deep link.
+///
+/// This supports the documented format:
+/// `plex-desktop://open?url={urlencoded_http_or_https_url}`
+///
+/// We intentionally keep this separate from `parse_deep_link()` because for this
+/// format we want to navigate to the *exact* provided URL (including fragments),
+/// rather than reconstructing a `/web/index.html#!/...` URL from parts.
+fn extract_direct_web_url_from_deep_link(deep_link: &str) -> Option<String> {
+    let parsed = Url::parse(deep_link).ok()?;
+    if parsed.scheme() != "plex-desktop" {
+        return None;
+    }
+
+    // In URLs like `plex-desktop://open?url=...`, "open" is the host.
+    // We also accept `plex-desktop:/open?url=...` (path-based) if ever used.
+    let is_open =
+        parsed.host_str() == Some("open") || parsed.path().eq_ignore_ascii_case("/open");
+    if !is_open {
+        return None;
+    }
+
+    let query_params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+    let encoded = query_params.get("url")?;
+    let decoded = urlencoding::decode(encoded).ok()?;
+    Some(decoded.to_string())
+}
+
 fn construct_plex_url(
     base_url: &str,
     server_id: Option<&str>,
@@ -1908,6 +1979,40 @@ async fn navigate_to_deep_link(app: AppHandle, url: String) -> Result<(), String
     check_rate_limit(rate_limit_source)?;
     
     eprintln!("Navigating to deep link: {}", url);
+
+    // Format 1 (documented): `plex-desktop://open?url=<urlencoded_full_web_url>`
+    // Navigate to the exact decoded URL (including `#...`) after validating that the
+    // origin matches a configured server.
+    if let Some(web_url) = extract_direct_web_url_from_deep_link(&url) {
+        let parsed_web_url =
+            Url::parse(&web_url).map_err(|e| format!("Invalid URL in deep link: {}", e))?;
+        if parsed_web_url.scheme() != "http" && parsed_web_url.scheme() != "https" {
+            return Err("Deep link URL must use http:// or https://".to_string());
+        }
+
+        // HIGH-003: Ensure the target origin is one of the configured server origins.
+        // This keeps `open?url=` from being a generic URL opener.
+        validate_deep_link_base_url(&web_url).map_err(|e| {
+            format!(
+                "{}. Add this server in Plex Desktop settings first (server base URL must match).",
+                e
+            )
+        })?;
+
+        let window = app
+            .get_webview_window("main")
+            .ok_or_else(|| "Main window not found".to_string())?;
+        let _ = window.show();
+        let _ = window.set_focus();
+
+        let _ = window.navigate(
+            tauri::Url::parse(&web_url).map_err(|e| format!("Invalid URL: {}", e))?,
+        );
+
+        eprintln!("Navigated to direct web URL from deep link");
+        return Ok(());
+    }
+
     let (base_url_override, server_id, key, extra_query) = parse_deep_link(&url)?;
 
     eprintln!(
@@ -1948,8 +2053,10 @@ async fn navigate_to_deep_link(app: AppHandle, url: String) -> Result<(), String
     Ok(())
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run(context: tauri::Context<tauri::Wry>) {
+    // Apply any opt-in GPU/hardware-acceleration overrides BEFORE initializing the webview.
+    apply_hwaccel_overrides_from_env();
+
     // Check for command line arguments (deep links)
     let args: Vec<String> = std::env::args().collect();
     let mut deep_link_url: Option<String> = None;
@@ -2037,7 +2144,6 @@ pub fn run() {
             eprintln!("Config file path: {:?}", get_config_path());
 
             // Auto-discover servers on startup if config is empty
-            let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 // Wait a bit for the app to fully initialize
                 std::thread::sleep(Duration::from_secs(2));
@@ -2129,23 +2235,13 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-    use std::fs;
-    use std::env;
-
-    // Helper to create a temporary config directory for testing
-    fn setup_test_config() -> (TempDir, PathBuf) {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = temp_dir.path().join("config.json");
-        (temp_dir, config_path)
-    }
 
     #[test]
     fn test_validate_server_url() {
@@ -2223,20 +2319,20 @@ mod tests {
         // Format 2: OAuth callback
         let result = parse_deep_link("plex-desktop://auth?token=abc123");
         assert!(result.is_ok());
-        let (base_url, server_id, key, extra) = result.unwrap();
+        let (base_url, _server_id, _key, _extra) = result.unwrap();
         assert!(base_url.is_some());
         let base_url_str = base_url.unwrap();
         assert!(base_url_str.contains("oauth://token") || base_url_str.contains("token=abc123"));
 
         // Format 3: baseUrl override
-        let (base_url, server_id, key, extra) = parse_deep_link(
+        let (base_url, _server_id, key, _extra) = parse_deep_link(
             "plex-desktop://open?baseUrl=http%3A%2F%2Flocalhost%3A32400&key=%2Flibrary%2Fmetadata%2F123"
         ).unwrap();
         assert_eq!(base_url, Some("http://localhost:32400".to_string()));
         assert_eq!(key, Some("/library/metadata/123".to_string()));
 
         // Format 4: Simple key-only
-        let (base_url, server_id, key, extra) = parse_deep_link(
+        let (base_url, server_id, key, _extra) = parse_deep_link(
             "plex-desktop://open?key=/library/metadata/456"
         ).unwrap();
         assert_eq!(base_url, None);
@@ -2254,23 +2350,26 @@ mod tests {
         
         // Test with port
         let encoded_with_port = urlencoding::encode("http://192.168.1.100:32400/web/index.html#!/server/abc123/details?key=/library/metadata/123");
-        let (base_url, server_id, key, _) = parse_deep_link(
+        let (base_url, _server_id, key, _) = parse_deep_link(
             &format!("plex-desktop://open?url={}", encoded_with_port)
         ).unwrap();
         assert_eq!(base_url, Some("http://192.168.1.100:32400".to_string()));
-        assert_eq!(key, Some("/web/index.html#!/server/abc123/details".to_string()));
+        // Note: `Url::parse()` treats everything after `#` as a fragment; `parse_deep_link()`
+        // only uses the decoded URL's *path* here. The full-fragment navigation is handled
+        // by `extract_direct_web_url_from_deep_link()` + direct navigation in `navigate_to_deep_link()`.
+        assert_eq!(key, Some("/web/index.html".to_string()));
 
         // Test without port (default port)
         let encoded_no_port = urlencoding::encode("https://plex.example.com/web/index.html#!/details?key=/library/metadata/456");
-        let (base_url, server_id, key, _) = parse_deep_link(
+        let (base_url, _server_id, key, _) = parse_deep_link(
             &format!("plex-desktop://open?url={}", encoded_no_port)
         ).unwrap();
         assert_eq!(base_url, Some("https://plex.example.com".to_string()));
-        assert_eq!(key, Some("/web/index.html#!/details".to_string()));
+        assert_eq!(key, Some("/web/index.html".to_string()));
 
         // Test with non-standard port
         let encoded_custom_port = urlencoding::encode("http://localhost:8080/web/index.html#!/details?key=/library/metadata/789");
-        let (base_url, server_id, key, _) = parse_deep_link(
+        let (base_url, _server_id, _key, _) = parse_deep_link(
             &format!("plex-desktop://open?url={}", encoded_custom_port)
         ).unwrap();
         assert_eq!(base_url, Some("http://localhost:8080".to_string()));

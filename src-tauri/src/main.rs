@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    plex_desktop_lib::run()
+    plex_desktop_lib::run(tauri::generate_context!());
 }

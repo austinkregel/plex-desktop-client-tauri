@@ -1,0 +1,31 @@
+[package]
+name = "simplex-app"
+version = "0.1.0"
+edition = "2021"
+description = "GTK4 + GStreamer desktop media client for Plex servers"
+
+[[bin]]
+name = "simplex"
+path = "src/main.rs"
+
+[dependencies]
+simplex-core = { path = "../simplex-core" }
+gtk4 = { version = "0.9", features = ["v4_14"] }
+libadwaita = { version = "0.7", features = ["v1_5"] }
+gdk4 = "0.9"
+glib = { package = "glib", version = "0.20" }
+gstreamer = "0.23"
+gstreamer-video = "0.23"
+gstreamer-player = "0.23"
+gstreamer-pbutils = "0.23"
+gstreamer-audio = "0.23"
+gst-plugin-gtk4 = { version = "0.13", features = ["static"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.8"
+open = "5"
+async-channel = "2.5.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

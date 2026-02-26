@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/simplex-core",
+    "crates/simplex-app",
+]
+
+# Optimize all dependencies even in debug builds.
+# Critical for real-time video: gst-plugin-gtk4 processes every frame
+# on the GTK main thread and is unusably slow without optimization.
+[profile.dev.package."*"]
+opt-level = 2

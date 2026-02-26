@@ -1,0 +1,130 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test simplex-core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p simplex-core
+
+  build-linux:
+    name: Build Linux (${{ matrix.arch }})
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [x86_64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-4-dev \
+            libadwaita-1-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-vaapi \
+            gstreamer1.0-libav
+
+      - name: Build
+        run: cargo build --release -p simplex-app
+
+      - name: Create .deb package
+        run: |
+          mkdir -p pkg/DEBIAN
+          mkdir -p pkg/usr/bin
+          mkdir -p pkg/usr/share/applications
+          cp target/release/simplex pkg/usr/bin/
+          cp simplex.desktop pkg/usr/share/applications/
+          cat > pkg/DEBIAN/control << 'CTRL'
+          Package: simplex
+          Version: 0.1.0
+          Section: video
+          Priority: optional
+          Architecture: amd64
+          Depends: libgtk-4-1, libadwaita-1-0, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-vaapi, gstreamer1.0-libav
+          Maintainer: Austin Kregel
+          Description: Native media client for Plex servers
+           Simplex is a GTK4 + GStreamer desktop client for browsing
+           and playing media from Plex servers with hardware-accelerated
+           video, PiP, and audio track change detection.
+          CTRL
+          dpkg-deb --build pkg simplex_0.1.0_amd64.deb
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: simplex-linux-${{ matrix.arch }}
+          path: |
+            target/release/simplex
+            simplex_*.deb
+
+  build-windows:
+    name: Build Windows
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install GTK4 and GStreamer (MSYS2)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-libadwaita
+            mingw-w64-ucrt-x86_64-gstreamer
+            mingw-w64-ucrt-x86_64-gst-plugins-base
+            mingw-w64-ucrt-x86_64-gst-plugins-good
+            mingw-w64-ucrt-x86_64-gst-plugins-bad
+            mingw-w64-ucrt-x86_64-pkg-config
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          export PKG_CONFIG_PATH="/ucrt64/lib/pkgconfig:$PKG_CONFIG_PATH"
+          cargo build --release -p simplex-app
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: simplex-windows-x86_64
+          path: target/release/simplex.exe
+
+  release:
+    name: Create Release
+    needs: [build-linux, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            simplex-linux-x86_64/*
+            simplex-windows-x86_64/*
+          generate_release_notes: true
