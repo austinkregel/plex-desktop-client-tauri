@@ -96,7 +96,11 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                 }
                 Err(e) => {
                     tracing::error!("Failed to fetch hubs: {}", e);
-                    let _ = tx.send(HubResult::Err(e.to_string())).await;
+                    let _ = tx.send(HubResult::Err(
+                        "Could not load your Plex home feed. Please check connectivity and try again."
+                            .to_string(),
+                    ))
+                    .await;
                 }
             }
         });
@@ -136,8 +140,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                         }
                     }
                     HubResult::Err(err) => {
-                        let msg = format!("Failed to load content: {}", err);
-                        let label = Label::new(Some(&msg));
+                        let label = Label::new(Some(&err));
                         label.add_css_class("dim-label");
                         label.set_halign(gtk4::Align::Center);
                         label.set_wrap(true);

@@ -1,3 +1,5 @@
+use std::path::Path;
+
 mod app;
 mod window;
 mod views;
@@ -16,13 +18,22 @@ fn main() {
 
         let location = info
             .location()
-            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .map(|l| {
+                let file_name = Path::new(l.file())
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown");
+                format!("{}:{}:{}", file_name, l.line(), l.column())
+            })
             .unwrap_or_else(|| "unknown location".to_string());
 
         eprintln!("\n=== SIMPLEX PANIC ===");
         eprintln!("Location: {}", location);
         eprintln!("Message: {}", payload);
-        eprintln!("Backtrace:\n{}", std::backtrace::Backtrace::force_capture());
+        // Full backtraces are useful in dev, but too noisy/leaky for release.
+        if cfg!(debug_assertions) || std::env::var("SIMPLEX_DEBUG_PANIC").ok().as_deref() == Some("1") {
+            eprintln!("Backtrace:\n{}", std::backtrace::Backtrace::force_capture());
+        }
         eprintln!("=== END PANIC ===\n");
     }));
 

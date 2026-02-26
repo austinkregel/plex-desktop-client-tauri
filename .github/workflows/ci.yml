@@ -6,48 +6,40 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  build-tauri:
-    name: Build (${{ matrix.os }} / ${{ matrix.rust_target }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # macOS Intel
-          - os: macos-13
-            rust_target: x86_64-apple-darwin
-          # macOS Apple Silicon
-          - os: macos-14
-            rust_target: aarch64-apple-darwin
-          # Windows (MSVC)
-          - os: windows-latest
-            rust_target: x86_64-pc-windows-msvc
-
-    runs-on: ${{ matrix.os }}
-
+  rust-checks:
+    name: Rust Checks
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-
-      - name: Setup Rust (with target)
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust_target }}
+          components: clippy, rustfmt
 
-      - name: Show Rust targets
-        run: rustup show
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-4-dev \
+            libadwaita-1-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev
 
-      - name: Install JS deps
-        run: npm ci
+      - name: Format
+        run: cargo fmt --all -- --check
 
-      - name: Build Tauri app
-        run: npm run tauri build -- --target ${{ matrix.rust_target }}
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
 
 
 

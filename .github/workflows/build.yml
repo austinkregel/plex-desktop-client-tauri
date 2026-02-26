@@ -1,4 +1,4 @@
-name: Build & Release
+name: GTK Build And Release
 
 on:
   push:
@@ -6,6 +6,7 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,12 +21,9 @@ jobs:
       - run: cargo test -p simplex-core
 
   build-linux:
-    name: Build Linux (${{ matrix.arch }})
+    name: Build Linux x86_64
     needs: test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [x86_64]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -45,19 +43,18 @@ jobs:
             gstreamer1.0-vaapi \
             gstreamer1.0-libav
 
-      - name: Build
+      - name: Build GTK app
         run: cargo build --release -p simplex-app
 
-      - name: Create .deb package
+      - name: Package .deb
         run: |
-          mkdir -p pkg/DEBIAN
-          mkdir -p pkg/usr/bin
-          mkdir -p pkg/usr/share/applications
+          APP_VERSION=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(p["version"] for p in d["packages"] if p["name"]=="simplex-app"))')
+          mkdir -p pkg/DEBIAN pkg/usr/bin pkg/usr/share/applications dist
           cp target/release/simplex pkg/usr/bin/
           cp simplex.desktop pkg/usr/share/applications/
-          cat > pkg/DEBIAN/control << 'CTRL'
+          cat > pkg/DEBIAN/control <<CTRL
           Package: simplex
-          Version: 0.1.0
+          Version: ${APP_VERSION}
           Section: video
           Priority: optional
           Architecture: amd64
@@ -68,18 +65,22 @@ jobs:
            and playing media from Plex servers with hardware-accelerated
            video, PiP, and audio track change detection.
           CTRL
-          dpkg-deb --build pkg simplex_0.1.0_amd64.deb
+          dpkg-deb --build pkg "dist/simplex_${APP_VERSION}_amd64.deb"
+          cp target/release/simplex "dist/simplex-linux-x86_64"
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum simplex-linux-x86_64 *.deb > SHA256SUMS.txt
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: simplex-linux-${{ matrix.arch }}
-          path: |
-            target/release/simplex
-            simplex_*.deb
+          name: simplex-linux-x86_64
+          path: dist/*
 
   build-windows:
-    name: Build Windows
+    name: Build Windows x86_64
     needs: test
     runs-on: windows-latest
     steps:
@@ -100,20 +101,32 @@ jobs:
             mingw-w64-ucrt-x86_64-gst-plugins-bad
             mingw-w64-ucrt-x86_64-pkg-config
 
-      - name: Build
+      - name: Build GTK app
         shell: msys2 {0}
         run: |
           export PKG_CONFIG_PATH="/ucrt64/lib/pkgconfig:$PKG_CONFIG_PATH"
           cargo build --release -p simplex-app
 
+      - name: Prepare distribution files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Copy-Item target/release/simplex.exe dist/simplex-windows-x86_64.exe
+
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist/simplex-windows-x86_64.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  simplex-windows-x86_64.exe" | Out-File -Encoding ascii dist/SHA256SUMS.txt
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: simplex-windows-x86_64
-          path: target/release/simplex.exe
+          path: dist/*
 
   release:
-    name: Create Release
+    name: Create GitHub Release Assets
     needs: [build-linux, build-windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -121,7 +134,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
-      - name: Create Release
+      - name: Publish release files
         uses: softprops/action-gh-release@v2
         with:
           files: |

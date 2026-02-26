@@ -53,7 +53,7 @@ impl AppState {
         tracing::info!(
             "AppState: token={}, server={}, client_id={}",
             if token.is_some() { "present" } else { "none" },
-            server.as_ref().map(|s| s.base_url.as_str()).unwrap_or("none"),
+            if server.is_some() { "present" } else { "none" },
             &client_id[..8.min(client_id.len())]
         );
 

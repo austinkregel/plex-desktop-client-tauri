@@ -7,6 +7,9 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 #[derive(Debug, Clone, Copy)]
 pub struct CachePolicy {
     pub ttl_secs: u64,
@@ -47,6 +50,13 @@ fn cache_dir() -> Option<PathBuf> {
     if !dir.exists() && fs::create_dir_all(&dir).is_err() {
         return None;
     }
+    #[cfg(unix)]
+    {
+        if let Ok(mut perms) = fs::metadata(&dir).map(|m| m.permissions()) {
+            perms.set_mode(0o700);
+            let _ = fs::set_permissions(&dir, perms);
+        }
+    }
     Some(dir)
 }
 
@@ -79,6 +89,15 @@ fn write_disk_record(record: &CacheRecord) {
         return;
     };
     let _ = fs::write(path, content);
+    #[cfg(unix)]
+    {
+        if let Some(path) = cache_file_path(&record.key) {
+            if let Ok(mut perms) = fs::metadata(&path).map(|m| m.permissions()) {
+                perms.set_mode(0o600);
+                let _ = fs::set_permissions(path, perms);
+            }
+        }
+    }
 }
 
 pub fn get<T: DeserializeOwned>(key: &str, policy: CachePolicy) -> Option<T> {
@@ -201,5 +220,19 @@ mod tests {
         let b: Option<u64> = get(key_b, CachePolicy { ttl_secs: 60 });
         assert!(a.is_none());
         assert!(b.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_cache_file_permissions_are_restricted() {
+        let key = "test:file_permissions";
+        set(key, &"value".to_string());
+        let path = cache_file_path(key).expect("cache path should exist");
+        let mode = fs::metadata(path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }

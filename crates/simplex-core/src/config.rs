@@ -38,7 +38,8 @@ pub enum ConfigError {
 pub struct AppConfig {
     pub servers: Vec<ServerConfig>,
     pub default_server_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // Legacy migration field: deserialize only, never write back to disk.
+    #[serde(default, skip_serializing)]
     pub auth_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
@@ -127,7 +128,10 @@ pub fn load_config() -> AppConfig {
 
 pub fn save_config(config: &AppConfig) -> Result<(), ConfigError> {
     let config_path = get_config_path();
-    let content = serde_json::to_string_pretty(config)?;
+    // Never persist auth tokens; keychain is the only supported store.
+    let mut config_to_save = config.clone();
+    config_to_save.auth_token = None;
+    let content = serde_json::to_string_pretty(&config_to_save)?;
 
     fs::write(&config_path, content)?;
 
@@ -601,6 +605,15 @@ mod tests {
         assert!(config.auth_token.is_none());
         assert!(config.client_id.is_none());
         assert!(config.pinned_library_keys.is_empty());
+    }
+
+    #[test]
+    fn test_auth_token_never_serialized() {
+        let mut config = AppConfig::default();
+        config.auth_token = Some("secret-token".to_string());
+        let json = serde_json::to_string_pretty(&config).unwrap();
+        assert!(!json.contains("auth_token"));
+        assert!(!json.contains("secret-token"));
     }
 
     #[test]
