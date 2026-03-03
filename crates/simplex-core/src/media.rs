@@ -5,10 +5,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::{MismatchAction, UserSettings};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackPreference {
     pub preferred_languages: Vec<String>,
     pub pause_on_mismatch: bool,
+    pub mismatch_action: MismatchAction,
 }
 
 impl Default for TrackPreference {
@@ -16,6 +19,18 @@ impl Default for TrackPreference {
         Self {
             preferred_languages: vec!["eng".to_string(), "en".to_string()],
             pause_on_mismatch: true,
+            mismatch_action: MismatchAction::WarnDialog,
+        }
+    }
+}
+
+impl TrackPreference {
+    pub fn from_user_settings(settings: &UserSettings) -> Self {
+        let action = settings.audio.language_mismatch_action.clone();
+        Self {
+            preferred_languages: settings.audio.preferred_languages.clone(),
+            pause_on_mismatch: action != MismatchAction::Ignore,
+            mismatch_action: action,
         }
     }
 }
@@ -160,6 +175,11 @@ mod tests {
         session.track_preference = TrackPreference {
             preferred_languages: preferred_languages.iter().map(|s| (*s).to_string()).collect(),
             pause_on_mismatch,
+            mismatch_action: if pause_on_mismatch {
+                MismatchAction::Pause
+            } else {
+                MismatchAction::Ignore
+            },
         };
         session
     }
@@ -354,5 +374,69 @@ mod tests {
         };
 
         assert!(session.evaluate_audio_track_change(&new_track).is_none());
+    }
+
+    // -- TrackPreference::from_user_settings tests --
+
+    #[test]
+    fn test_from_user_settings_pause() {
+        let mut settings = UserSettings::default();
+        settings.audio.language_mismatch_action = MismatchAction::Pause;
+        settings.audio.preferred_languages = vec!["jpn".to_string()];
+
+        let pref = TrackPreference::from_user_settings(&settings);
+        assert!(pref.pause_on_mismatch);
+        assert_eq!(pref.mismatch_action, MismatchAction::Pause);
+        assert_eq!(pref.preferred_languages, vec!["jpn"]);
+    }
+
+    #[test]
+    fn test_from_user_settings_warn_dialog() {
+        let mut settings = UserSettings::default();
+        settings.audio.language_mismatch_action = MismatchAction::WarnDialog;
+
+        let pref = TrackPreference::from_user_settings(&settings);
+        assert!(pref.pause_on_mismatch);
+        assert_eq!(pref.mismatch_action, MismatchAction::WarnDialog);
+    }
+
+    #[test]
+    fn test_from_user_settings_ignore() {
+        let mut settings = UserSettings::default();
+        settings.audio.language_mismatch_action = MismatchAction::Ignore;
+
+        let pref = TrackPreference::from_user_settings(&settings);
+        assert!(!pref.pause_on_mismatch);
+        assert_eq!(pref.mismatch_action, MismatchAction::Ignore);
+    }
+
+    #[test]
+    fn test_from_user_settings_inherits_languages() {
+        let mut settings = UserSettings::default();
+        settings.audio.preferred_languages = vec![
+            "fra".to_string(),
+            "deu".to_string(),
+            "eng".to_string(),
+        ];
+
+        let pref = TrackPreference::from_user_settings(&settings);
+        assert_eq!(pref.preferred_languages, vec!["fra", "deu", "eng"]);
+    }
+
+    #[test]
+    fn test_from_user_settings_empty_languages() {
+        let mut settings = UserSettings::default();
+        settings.audio.preferred_languages = Vec::new();
+
+        let pref = TrackPreference::from_user_settings(&settings);
+        assert!(pref.preferred_languages.is_empty());
+    }
+
+    #[test]
+    fn test_track_preference_default_has_warn_dialog() {
+        let pref = TrackPreference::default();
+        assert_eq!(pref.mismatch_action, MismatchAction::WarnDialog);
+        assert!(pref.pause_on_mismatch);
+        assert_eq!(pref.preferred_languages, vec!["eng", "en"]);
     }
 }

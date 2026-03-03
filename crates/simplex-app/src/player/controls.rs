@@ -2,14 +2,15 @@
 
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Button, Label, Orientation, Overlay, Revealer, RevealerTransitionType, Scale,
-    WindowHandle,
+    Box as GtkBox, Button, Label, Orientation, Overlay, Picture, Popover, Revealer,
+    RevealerTransitionType, Scale, WindowHandle,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use super::pipeline::PlayerPipeline;
+use super::quick_settings;
 use simplex_core::ui_utils::format_time;
 
 pub struct PlayerControls {
@@ -31,7 +32,18 @@ pub struct PlayerControls {
     pub stop_button: Button,
     pub skip_back_button: Button,
     pub skip_forward_button: Button,
+    pub quick_settings_button: Button,
+    pub quick_settings_popover: Popover,
     updating_seek: Rc<Cell<bool>>,
+    pub skip_action_revealer: Revealer,
+    pub skip_action_button: Button,
+    pub up_next_revealer: Revealer,
+    pub up_next_title: Label,
+    pub up_next_subtitle: Label,
+    pub up_next_thumb: Picture,
+    pub up_next_countdown: Label,
+    pub up_next_play_button: Button,
+    pub up_next_cancel_button: Button,
 }
 
 fn pip_icon_svg() -> gtk4::Image {
@@ -196,8 +208,11 @@ impl PlayerControls {
         pip_button.add_css_class("flat");
         pip_button.set_tooltip_text(Some("Picture-in-Picture"));
 
+        let (quick_settings_button, quick_settings_popover) = quick_settings::build(pipeline);
+
         utility_box.append(&volume_button);
         utility_box.append(&volume_scale);
+        utility_box.append(&quick_settings_button);
         utility_box.append(&pip_button);
 
         button_row.append(&meta_box);
@@ -207,6 +222,88 @@ impl PlayerControls {
 
         bottom_revealer.set_child(Some(&controls_bar));
         overlay.add_overlay(&bottom_revealer);
+
+        // --- Skip Intro / Skip Credits button (bottom-right, above controls) ---
+        let skip_action_revealer = Revealer::new();
+        skip_action_revealer.set_transition_type(RevealerTransitionType::SlideLeft);
+        skip_action_revealer.set_transition_duration(250);
+        skip_action_revealer.set_reveal_child(false);
+        skip_action_revealer.set_halign(gtk4::Align::End);
+        skip_action_revealer.set_valign(gtk4::Align::End);
+        skip_action_revealer.set_margin_end(16);
+        skip_action_revealer.set_margin_bottom(100);
+
+        let skip_action_button = Button::with_label("Skip Intro");
+        skip_action_button.add_css_class("osd");
+        skip_action_button.add_css_class("pill");
+        skip_action_button.set_size_request(120, -1);
+        skip_action_revealer.set_child(Some(&skip_action_button));
+        overlay.add_overlay(&skip_action_revealer);
+
+        // --- Up Next card (bottom-right, above skip button) ---
+        let up_next_revealer = Revealer::new();
+        up_next_revealer.set_transition_type(RevealerTransitionType::SlideLeft);
+        up_next_revealer.set_transition_duration(300);
+        up_next_revealer.set_reveal_child(false);
+        up_next_revealer.set_halign(gtk4::Align::End);
+        up_next_revealer.set_valign(gtk4::Align::End);
+        up_next_revealer.set_margin_end(16);
+        up_next_revealer.set_margin_bottom(160);
+
+        let up_next_card = GtkBox::new(Orientation::Horizontal, 10);
+        up_next_card.add_css_class("osd");
+        up_next_card.set_margin_top(8);
+        up_next_card.set_margin_bottom(8);
+        up_next_card.set_margin_start(10);
+        up_next_card.set_margin_end(10);
+
+        let up_next_thumb = Picture::new();
+        up_next_thumb.set_size_request(120, 68);
+        up_next_thumb.set_content_fit(gtk4::ContentFit::Cover);
+        up_next_card.append(&up_next_thumb);
+
+        let up_next_info = GtkBox::new(Orientation::Vertical, 2);
+        up_next_info.set_valign(gtk4::Align::Center);
+
+        let up_next_header = Label::new(Some("Up Next"));
+        up_next_header.add_css_class("dim-label");
+        up_next_header.add_css_class("caption");
+        up_next_header.set_xalign(0.0);
+        up_next_info.append(&up_next_header);
+
+        let up_next_title = Label::new(None);
+        up_next_title.add_css_class("heading");
+        up_next_title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        up_next_title.set_max_width_chars(25);
+        up_next_title.set_xalign(0.0);
+        up_next_info.append(&up_next_title);
+
+        let up_next_subtitle = Label::new(None);
+        up_next_subtitle.add_css_class("dim-label");
+        up_next_subtitle.add_css_class("caption");
+        up_next_subtitle.set_xalign(0.0);
+        up_next_info.append(&up_next_subtitle);
+
+        let up_next_countdown = Label::new(None);
+        up_next_countdown.add_css_class("caption");
+        up_next_countdown.set_xalign(0.0);
+        up_next_info.append(&up_next_countdown);
+
+        let up_next_buttons = GtkBox::new(Orientation::Horizontal, 4);
+        up_next_buttons.set_margin_top(4);
+        let up_next_play_button = Button::with_label("Play Now");
+        up_next_play_button.add_css_class("suggested-action");
+        up_next_play_button.add_css_class("pill");
+        let up_next_cancel_button = Button::from_icon_name("window-close-symbolic");
+        up_next_cancel_button.add_css_class("flat");
+        up_next_cancel_button.set_tooltip_text(Some("Cancel"));
+        up_next_buttons.append(&up_next_play_button);
+        up_next_buttons.append(&up_next_cancel_button);
+        up_next_info.append(&up_next_buttons);
+
+        up_next_card.append(&up_next_info);
+        up_next_revealer.set_child(Some(&up_next_card));
+        overlay.add_overlay(&up_next_revealer);
 
         // --- Connect play/pause ---
         let pipe = pipeline.clone();
@@ -315,7 +412,18 @@ impl PlayerControls {
             stop_button,
             skip_back_button,
             skip_forward_button,
+            quick_settings_button,
+            quick_settings_popover,
             updating_seek,
+            skip_action_revealer,
+            skip_action_button,
+            up_next_revealer,
+            up_next_title,
+            up_next_subtitle,
+            up_next_thumb,
+            up_next_countdown,
+            up_next_play_button,
+            up_next_cancel_button,
         }
     }
 
@@ -338,4 +446,44 @@ impl PlayerControls {
         }
     }
 
+    pub fn show_skip_action(&self, label: &str) {
+        self.skip_action_button.set_label(label);
+        self.skip_action_revealer.set_reveal_child(true);
+    }
+
+    pub fn hide_skip_action(&self) {
+        self.skip_action_revealer.set_reveal_child(false);
+    }
+
+    pub fn show_up_next(&self, title: &str, subtitle: &str) {
+        self.up_next_title.set_text(title);
+        self.up_next_subtitle.set_text(subtitle);
+        self.up_next_revealer.set_reveal_child(true);
+    }
+
+    pub fn hide_up_next(&self) {
+        self.up_next_revealer.set_reveal_child(false);
+    }
+
+    pub fn set_up_next_countdown(&self, secs: u8) {
+        self.up_next_countdown.set_text(&format!("Playing in {}...", secs));
+    }
+
+    pub fn load_up_next_thumb(&self, url: &str) {
+        let thumb = self.up_next_thumb.clone();
+        let url = url.to_string();
+        let (tx, rx) = async_channel::bounded::<glib::Bytes>(1);
+        crate::app::runtime().spawn(async move {
+            let Ok(resp) = reqwest::get(&url).await else { return };
+            let Ok(bytes) = resp.bytes().await else { return };
+            let _ = tx.send(glib::Bytes::from(&bytes)).await;
+        });
+        glib::spawn_future_local(async move {
+            if let Ok(gbytes) = rx.recv().await {
+                if let Ok(texture) = gdk4::Texture::from_bytes(&gbytes) {
+                    thumb.set_paintable(Some(&texture));
+                }
+            }
+        });
+    }
 }

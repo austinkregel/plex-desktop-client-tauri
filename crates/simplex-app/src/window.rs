@@ -35,6 +35,9 @@ pub struct AppState {
     pub selected_library_key: Option<String>,
     /// Active shared playback pipeline used by full and mini player controls.
     pub playback_pipeline: Option<Arc<Mutex<PlayerPipeline>>>,
+    /// Parent rating key of the currently displayed detail item, used for
+    /// hierarchy-aware back navigation (episode→season→show→library).
+    pub detail_parent_key: Option<String>,
 }
 
 impl AppState {
@@ -73,6 +76,7 @@ impl AppState {
             playback_offset: None,
             selected_library_key: None,
             playback_pipeline: None,
+            detail_parent_key: None,
         }
     }
 
@@ -84,12 +88,32 @@ impl AppState {
 /// Navigate to the detail page for a given item.
 pub fn navigate_to_detail(state: &Arc<Mutex<AppState>>, rating_key: &str, from_view: &str) {
     let view_stack = {
-        let mut s = state.lock().unwrap();
-        s.current_item_key = Some(rating_key.to_string());
-        s.previous_view = Some(from_view.to_string());
+        let s = state.lock().unwrap();
         s.view_stack.clone()
     };
+
+    let already_on_detail = view_stack
+        .as_ref()
+        .and_then(|v| v.visible_child_name())
+        .as_deref()
+        == Some("detail");
+
+    let fallback = {
+        let mut s = state.lock().unwrap();
+        if !already_on_detail {
+            s.previous_view = Some(from_view.to_string());
+        }
+        s.current_item_key = Some(rating_key.to_string());
+        s.detail_parent_key = None;
+        s.previous_view.clone()
+    };
+
     if let Some(vs) = view_stack {
+        if already_on_detail {
+            // Force unmap/remap so connect_map fires with the new key.
+            let tmp = fallback.unwrap_or_else(|| "on-deck".to_string());
+            vs.set_visible_child_name(&tmp);
+        }
         vs.set_visible_child_name("detail");
     }
 }
@@ -226,6 +250,7 @@ pub fn build_window(app: &Application) {
     let collections_page = views::collections::build(state.clone());
     let detail_page = views::detail::build(state.clone());
     let player_page = views::player::build(state.clone());
+    let settings_page = views::settings::build(state.clone());
 
     view_stack.add_titled(&login_page, Some("login"), "Login");
     view_stack.add_titled(&on_deck_page, Some("on-deck"), "On Deck");
@@ -235,6 +260,7 @@ pub fn build_window(app: &Application) {
     view_stack.add_titled(&collections_page, Some("collections"), "Collections");
     view_stack.add_titled(&detail_page, Some("detail"), "Detail");
     view_stack.add_titled(&player_page, Some("player"), "Player");
+    view_stack.add_titled(&settings_page, Some("settings"), "Settings");
 
     // Set the initial page BEFORE building the sidebar so the sidebar
     // doesn't override it via its row-selected signal.

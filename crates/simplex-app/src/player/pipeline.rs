@@ -9,6 +9,7 @@ use gstreamer::prelude::*;
 use gstreamer::{Element, MessageView, State};
 use gtk4::prelude::*;
 use gtk4::Picture;
+use std::sync::{Arc, Mutex};
 
 pub struct PlayerPipeline {
     pipeline: Element,
@@ -16,6 +17,7 @@ pub struct PlayerPipeline {
     pub picture: Picture,
     uri: Option<String>,
     _bus_watch_guard: Option<gst::bus::BusWatchGuard>,
+    audio_streams: Arc<Mutex<Vec<gst::Stream>>>,
 }
 
 impl PlayerPipeline {
@@ -82,11 +84,13 @@ impl PlayerPipeline {
             picture,
             uri: None,
             _bus_watch_guard: None,
+            audio_streams: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
     pub fn set_uri(&mut self, uri: &str) {
         self.uri = Some(uri.to_string());
+        self.audio_streams.lock().unwrap().clear();
         self.pipeline.set_property("uri", uri);
     }
 
@@ -148,33 +152,63 @@ impl PlayerPipeline {
     }
 
     /// Get the number of audio tracks.
+    /// Falls back to 1 if the pipeline is playing but reports 0 tracks
+    /// (common with HLS/adaptive streams).
     pub fn audio_track_count(&self) -> i32 {
-        self.pipeline.property::<i32>("n-audio")
+        let count = self.try_i32_property("n-audio").unwrap_or(0);
+        if count == 0 && self.is_playing() {
+            tracing::debug!("n-audio is 0 while playing; assuming 1 audio track");
+            1
+        } else {
+            count
+        }
     }
 
     /// Get the current audio track index.
     pub fn current_audio_track(&self) -> i32 {
-        self.pipeline.property::<i32>("current-audio")
+        self.try_i32_property("current-audio").unwrap_or(-1)
     }
 
     /// Set the current audio track by index.
     pub fn set_audio_track(&self, index: i32) {
-        self.pipeline.set_property("current-audio", index);
+        if self.pipeline.find_property("current-audio").is_some() {
+            self.pipeline.set_property("current-audio", index);
+        }
     }
 
     /// Get the number of subtitle tracks.
     pub fn subtitle_track_count(&self) -> i32 {
-        self.pipeline.property::<i32>("n-text")
+        self.try_i32_property("n-text").unwrap_or(0)
     }
 
     /// Get the current subtitle track index.
     pub fn current_subtitle_track(&self) -> i32 {
-        self.pipeline.property::<i32>("current-text")
+        self.try_i32_property("current-text").unwrap_or(-1)
     }
 
     /// Set the current subtitle track by index.
     pub fn set_subtitle_track(&self, index: i32) {
-        self.pipeline.set_property("current-text", index);
+        if self.pipeline.find_property("current-text").is_some() {
+            self.pipeline.set_property("current-text", index);
+        }
+    }
+
+    /// Change playback speed using a rate-seek on the current position.
+    pub fn set_playback_speed(&self, rate: f64) {
+        let rate = rate.clamp(0.25, 4.0);
+        let position = self
+            .pipeline
+            .query_position::<gst::ClockTime>()
+            .unwrap_or(gst::ClockTime::ZERO);
+
+        let _ = self.pipeline.seek(
+            rate,
+            gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+            gst::SeekType::Set,
+            position,
+            gst::SeekType::End,
+            gst::ClockTime::ZERO,
+        );
     }
 
     /// Get the underlying GStreamer element for signal connections.
@@ -182,15 +216,72 @@ impl PlayerPipeline {
         &self.pipeline
     }
 
+    /// Get the tag list for a given audio track index.
+    /// Tries the playbin2-style `get-audio-tags` action signal first, then
+    /// falls back to the cached `StreamCollection` (required for playbin3).
+    fn audio_tags(&self, index: i32) -> Option<gst::TagList> {
+        if glib::subclass::SignalId::lookup("get-audio-tags", self.pipeline.type_()).is_some() {
+            return self.pipeline.emit_by_name("get-audio-tags", &[&index]);
+        }
+        let streams = self.audio_streams.lock().unwrap();
+        streams.get(index as usize).and_then(|s| s.tags())
+    }
+
+    pub fn audio_language(&self, index: i32) -> Option<String> {
+        self.audio_tags(index)
+            .and_then(|t| t.get::<gst::tags::LanguageCode>().map(|v| v.get().to_string()))
+    }
+
+    pub fn audio_title(&self, index: i32) -> Option<String> {
+        self.audio_tags(index)
+            .and_then(|t| t.get::<gst::tags::Title>().map(|v| v.get().to_string()))
+    }
+
+    pub fn audio_codec(&self, index: i32) -> Option<String> {
+        self.audio_tags(index)
+            .and_then(|t| t.get::<gst::tags::AudioCodec>().map(|v| v.get().to_string()))
+    }
+
     /// Get the paintable sink element.
     pub fn paintable_sink(&self) -> &Element {
         &self.paintable_sink
     }
 
+    /// Safely read an i32 property, returning None if the property does not
+    /// exist (e.g. pipeline not yet negotiated or in an error state).
+    fn try_i32_property(&self, name: &str) -> Option<i32> {
+        self.pipeline.find_property(name)?;
+        Some(self.pipeline.property::<i32>(name))
+    }
+
+    /// True when the pipeline has reached at least PAUSED (streams
+    /// have been negotiated and track properties are available).
+    fn has_streams(&self) -> bool {
+        let (_, current, _) = self.pipeline.state(gst::ClockTime::ZERO);
+        matches!(current, State::Paused | State::Playing)
+    }
+
     /// Connect to the bus for error/EOS/state-change handling.
+    /// Also intercepts `StreamCollection` messages to cache audio stream
+    /// metadata for playbin3 (which lacks the `get-audio-tags` signal).
     pub fn connect_bus<F: Fn(MessageView) + 'static>(&mut self, callback: F) {
         let bus = self.pipeline.bus().expect("Pipeline has no bus");
+        let streams_cache = self.audio_streams.clone();
         let guard = bus.add_watch_local(move |_, msg| {
+            if let MessageView::StreamCollection(sc) = msg.view() {
+                let collection = sc.stream_collection();
+                let mut audio = Vec::new();
+                let n = collection.len() as u32;
+                for i in 0..n {
+                    if let Some(stream) = collection.stream(i) {
+                        if stream.stream_type().contains(gst::StreamType::AUDIO) {
+                            audio.push(stream);
+                        }
+                    }
+                }
+                tracing::debug!("StreamCollection: found {} audio stream(s)", audio.len());
+                *streams_cache.lock().unwrap() = audio;
+            }
             callback(msg.view());
             glib::ControlFlow::Continue
         })

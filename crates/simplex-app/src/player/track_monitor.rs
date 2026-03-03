@@ -2,16 +2,26 @@
 //!
 //! Monitors GStreamer's notify::current-audio signal and evaluates track preferences.
 //! Extracts language information from GStreamer stream tags.
+//! Supports configurable mismatch actions: Pause, WarnDialog, or Ignore.
 
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::sync::{Arc, Mutex};
+use simplex_core::config::MismatchAction;
 use simplex_core::media::{AudioTrack, MediaSession, TrackEvent, TrackPreference};
 
 use super::pipeline::PlayerPipeline;
 
+/// Payload sent to the player view when a language warning dialog is needed.
+#[derive(Debug, Clone)]
+pub struct MismatchWarning {
+    pub language: String,
+    pub preferred: String,
+}
+
 pub struct TrackMonitor {
     session: Arc<Mutex<MediaSession>>,
+    warning_tx: Option<async_channel::Sender<MismatchWarning>>,
 }
 
 impl TrackMonitor {
@@ -20,7 +30,14 @@ impl TrackMonitor {
         session.track_preference = preference;
         Self {
             session: Arc::new(Mutex::new(session)),
+            warning_tx: None,
         }
+    }
+
+    /// Attach a channel sender so WarnDialog events can be delivered to the
+    /// GTK main thread for display.
+    pub fn set_warning_sender(&mut self, tx: async_channel::Sender<MismatchWarning>) {
+        self.warning_tx = Some(tx);
     }
 
     pub fn session(&self) -> &Arc<Mutex<MediaSession>> {
@@ -31,6 +48,7 @@ impl TrackMonitor {
     pub fn connect(&self, pipeline: &Arc<Mutex<PlayerPipeline>>) {
         let session = self.session.clone();
         let pipe = pipeline.clone();
+        let warning_tx = self.warning_tx.clone();
 
         let element = {
             let p = pipeline.lock().unwrap();
@@ -58,8 +76,30 @@ impl TrackMonitor {
 
             if let Some(event) = sess.evaluate_audio_track_change(&track) {
                 if let TrackEvent::PauseRequested { reason } = &event {
-                    tracing::warn!("{}", reason);
-                    pipe_guard.pause();
+                    let action = sess.track_preference.mismatch_action.clone();
+                    match action {
+                        MismatchAction::Pause => {
+                            tracing::warn!("{}", reason);
+                            pipe_guard.pause();
+                        }
+                        MismatchAction::WarnDialog => {
+                            tracing::warn!("{}", reason);
+                            pipe_guard.pause();
+                            if let Some(ref tx) = warning_tx {
+                                let lang = track
+                                    .language
+                                    .clone()
+                                    .unwrap_or_else(|| "Unknown".to_string());
+                                let preferred =
+                                    sess.track_preference.preferred_languages.join("/");
+                                let _ = tx.try_send(MismatchWarning {
+                                    language: lang,
+                                    preferred,
+                                });
+                            }
+                        }
+                        MismatchAction::Ignore => {}
+                    }
                 }
             }
 

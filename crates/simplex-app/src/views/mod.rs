@@ -6,3 +6,4 @@ pub mod on_deck;
 pub mod playlists;
 pub mod collections;
 pub mod player;
+pub mod settings;

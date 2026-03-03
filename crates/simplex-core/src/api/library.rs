@@ -96,6 +96,50 @@ where
     deserializer.deserialize_any(StringOrNumberVisitor)
 }
 
+/// Flexible deserializer that accepts a string, number, or null, defaulting to
+/// an empty string. Used for fields like `ratingKey` and `key` that are required
+/// in well-formed items but may be absent or numeric in virtual directory entries.
+fn de_flexible_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct FlexVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for FlexVisitor {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string, number, or null")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Self::Value, E> {
+            Ok(v)
+        }
+
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(String::new())
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(String::new())
+        }
+    }
+
+    deserializer.deserialize_any(FlexVisitor)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FilterOption {
     #[serde(deserialize_with = "de_string_or_number")]
@@ -120,15 +164,28 @@ pub struct GuidEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Marker {
+    pub id: Option<u64>,
+    #[serde(rename = "type")]
+    pub marker_type: Option<String>,
+    #[serde(rename = "startTimeOffset")]
+    pub start_time_offset: Option<u64>,
+    #[serde(rename = "endTimeOffset")]
+    pub end_time_offset: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetadataItem {
-    #[serde(rename = "ratingKey")]
+    #[serde(default, rename = "ratingKey", deserialize_with = "de_flexible_string")]
     pub rating_key: String,
+    #[serde(default, deserialize_with = "de_flexible_string")]
     pub key: String,
     /// Plex agent GUID (e.g. "plex://movie/5d776…" or legacy "com.plexapp.agents.imdb://tt0111161").
     pub guid: Option<String>,
     /// External IDs from matched agents (IMDB, TMDB, TVDB).
     #[serde(default, rename = "Guid")]
     pub external_guids: Vec<GuidEntry>,
+    #[serde(default)]
     pub title: String,
     #[serde(rename = "type")]
     pub media_type: Option<String>,
@@ -180,6 +237,8 @@ pub struct MetadataItem {
     pub viewed_leaf_count: Option<u32>,
     #[serde(rename = "Media")]
     pub media: Option<Vec<MediaInfo>>,
+    #[serde(default, rename = "Marker")]
+    pub markers: Vec<Marker>,
 }
 
 impl MetadataItem {
@@ -369,7 +428,11 @@ pub async fn get_metadata(base_url: &str, token: &str, rating_key: &str) -> Resu
     }
 
     let client = super::plex_client(token)?;
-    let url = format!("{}/library/metadata/{}", base_url.trim_end_matches('/'), rating_key);
+    let url = format!(
+        "{}/library/metadata/{}?includeMarkers=1",
+        base_url.trim_end_matches('/'),
+        rating_key
+    );
     let resp: MediaContainer<MetadataItem> = client.get(&url).send().await?.json().await?;
     let item = resp.media_container.metadata.into_iter().next()
         .ok_or_else(|| LibraryError::Parse("No metadata found".to_string()))?;
@@ -378,6 +441,9 @@ pub async fn get_metadata(base_url: &str, token: &str, rating_key: &str) -> Resu
 }
 
 /// Get children of an item (seasons for a show, episodes for a season).
+/// Merges both `Metadata` and `Directory` arrays from the response since Plex
+/// returns container children (seasons, albums) in `Directory` and leaf
+/// children (episodes, tracks) in `Metadata`.
 pub async fn get_children(base_url: &str, token: &str, rating_key: &str) -> Result<Vec<MetadataItem>, LibraryError> {
     let key = format!("library:get_children:{base_url}:{rating_key}");
     if let Some(cached) = cache::get::<Vec<MetadataItem>>(&key, CHILDREN_TTL) {
@@ -387,7 +453,9 @@ pub async fn get_children(base_url: &str, token: &str, rating_key: &str) -> Resu
     let client = super::plex_client(token)?;
     let url = format!("{}/library/metadata/{}/children", base_url.trim_end_matches('/'), rating_key);
     let resp: MediaContainer<MetadataItem> = client.get(&url).send().await?.json().await?;
-    let items = resp.media_container.metadata;
+    let mut items = resp.media_container.metadata;
+    items.extend(resp.media_container.directory);
+    items.retain(|i| !i.rating_key.is_empty());
     cache::set(&key, &items);
     Ok(items)
 }
@@ -520,6 +588,37 @@ pub async fn get_artist_discography(
         albums,
         eps_and_singles,
     })
+}
+
+/// Find the first unwatched or partially-watched episode for a show.
+/// Iterates seasons in order, then episodes within each season.
+/// Returns the first episode with `view_offset > 0` (resume), or
+/// the first episode with `view_count` absent/0 (unwatched).
+pub async fn get_next_episode(
+    base_url: &str,
+    token: &str,
+    show_rating_key: &str,
+) -> Result<Option<MetadataItem>, LibraryError> {
+    let mut seasons = get_children(base_url, token, show_rating_key).await?;
+    seasons.retain(|s| s.media_type.as_deref() == Some("season"));
+    seasons.sort_by_key(|s| s.index.unwrap_or(u32::MAX));
+
+    for season in &seasons {
+        let mut episodes = get_children(base_url, token, &season.rating_key).await.unwrap_or_default();
+        episodes.sort_by_key(|e| e.index.unwrap_or(u32::MAX));
+
+        // Prefer a partially-watched episode first (resume point).
+        if let Some(ep) = episodes.iter().find(|e| e.view_offset.unwrap_or(0) > 0) {
+            return Ok(Some(ep.clone()));
+        }
+
+        // Otherwise find the first completely unwatched episode.
+        if let Some(ep) = episodes.iter().find(|e| e.view_count.unwrap_or(0) == 0) {
+            return Ok(Some(ep.clone()));
+        }
+    }
+
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -705,6 +804,7 @@ mod tests {
             leaf_count: None,
             viewed_leaf_count: None,
             media: None,
+            markers: vec![],
         };
         overrides(&mut item);
         item

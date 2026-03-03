@@ -221,6 +221,8 @@ fn rebuild_nav_rows(
     nav_row_ids.borrow_mut().push("playlists".to_string());
     listbox.append(&make_nav_row("collections", "Collections", 12));
     nav_row_ids.borrow_mut().push("collections".to_string());
+    listbox.append(&make_nav_row("settings", "Settings", 12));
+    nav_row_ids.borrow_mut().push("settings".to_string());
 }
 
 fn show_pin_libraries_popover(

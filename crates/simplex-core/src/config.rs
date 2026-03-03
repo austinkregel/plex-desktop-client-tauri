@@ -34,6 +34,162 @@ pub enum ConfigError {
     RateLimited(String),
 }
 
+// ---------------------------------------------------------------------------
+// User settings types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum StreamQuality {
+    Original,
+    Maximum(u32),
+}
+
+impl Default for StreamQuality {
+    fn default() -> Self {
+        Self::Original
+    }
+}
+
+impl StreamQuality {
+    pub const PRESETS: &'static [(u32, &'static str)] = &[
+        (20_000, "20 Mbps (4K)"),
+        (12_000, "12 Mbps (1080p)"),
+        (8_000, "8 Mbps (1080p)"),
+        (4_000, "4 Mbps (720p)"),
+        (2_000, "2 Mbps (480p)"),
+    ];
+
+    pub fn label(&self) -> String {
+        match self {
+            Self::Original => "Original".to_string(),
+            Self::Maximum(kbps) => {
+                Self::PRESETS
+                    .iter()
+                    .find(|(k, _)| k == kbps)
+                    .map(|(_, l)| l.to_string())
+                    .unwrap_or_else(|| format!("{} kbps", kbps))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum MismatchAction {
+    Pause,
+    WarnDialog,
+    Ignore,
+}
+
+impl Default for MismatchAction {
+    fn default() -> Self {
+        Self::WarnDialog
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum SubtitleAutoEnable {
+    Always,
+    OnMismatch,
+    Never,
+}
+
+impl Default for SubtitleAutoEnable {
+    fn default() -> Self {
+        Self::OnMismatch
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaybackSettings {
+    #[serde(default)]
+    pub quality: StreamQuality,
+    #[serde(default)]
+    pub auto_adjust_quality: bool,
+    #[serde(default)]
+    pub preferred_codec: Option<String>,
+    #[serde(default = "default_true")]
+    pub remember_volume: bool,
+    #[serde(default = "default_volume")]
+    pub last_volume: f64,
+    #[serde(default = "default_speed")]
+    pub playback_speed: f64,
+}
+
+fn default_true() -> bool { true }
+fn default_volume() -> f64 { 1.0 }
+fn default_speed() -> f64 { 1.0 }
+
+impl Default for PlaybackSettings {
+    fn default() -> Self {
+        Self {
+            quality: StreamQuality::default(),
+            auto_adjust_quality: false,
+            preferred_codec: None,
+            remember_volume: true,
+            last_volume: 1.0,
+            playback_speed: 1.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioSettings {
+    #[serde(default = "default_audio_languages")]
+    pub preferred_languages: Vec<String>,
+    #[serde(default)]
+    pub language_mismatch_action: MismatchAction,
+}
+
+fn default_audio_languages() -> Vec<String> {
+    vec!["eng".to_string(), "en".to_string()]
+}
+
+impl Default for AudioSettings {
+    fn default() -> Self {
+        Self {
+            preferred_languages: default_audio_languages(),
+            language_mismatch_action: MismatchAction::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubtitleSettings {
+    #[serde(default)]
+    pub preferred_languages: Vec<String>,
+    #[serde(default)]
+    pub auto_enable: SubtitleAutoEnable,
+    #[serde(default)]
+    pub prefer_forced: bool,
+}
+
+impl Default for SubtitleSettings {
+    fn default() -> Self {
+        Self {
+            preferred_languages: Vec::new(),
+            auto_enable: SubtitleAutoEnable::default(),
+            prefer_forced: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UserSettings {
+    #[serde(default)]
+    pub playback: PlaybackSettings,
+    #[serde(default)]
+    pub audio: AudioSettings,
+    #[serde(default)]
+    pub subtitles: SubtitleSettings,
+}
+
+// ---------------------------------------------------------------------------
+// AppConfig
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub servers: Vec<ServerConfig>,
@@ -45,10 +201,13 @@ pub struct AppConfig {
     pub client_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_stats: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // Legacy: kept for deserialization migration only.
+    #[serde(default, skip_serializing)]
     pub device_settings: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pinned_library_keys: Vec<String>,
+    #[serde(default)]
+    pub user_settings: UserSettings,
 }
 
 impl AppConfig {
@@ -77,6 +236,7 @@ impl Default for AppConfig {
             session_stats: None,
             device_settings: None,
             pinned_library_keys: Vec::new(),
+            user_settings: UserSettings::default(),
         }
     }
 }
@@ -335,6 +495,22 @@ pub fn set_device_settings(settings: serde_json::Value) -> Result<(), ConfigErro
     save_config(&config)
 }
 
+pub fn load_user_settings() -> UserSettings {
+    load_config().user_settings
+}
+
+pub fn save_user_settings(settings: &UserSettings) -> Result<(), ConfigError> {
+    let mut config = load_config();
+    config.user_settings = settings.clone();
+    save_config(&config)
+}
+
+pub fn update_user_settings<F: FnOnce(&mut UserSettings)>(f: F) -> Result<(), ConfigError> {
+    let mut config = load_config();
+    f(&mut config.user_settings);
+    save_config(&config)
+}
+
 pub fn resolve_server_url(
     base_url: Option<&str>,
     server_id: Option<&str>,
@@ -586,6 +762,7 @@ mod tests {
             session_stats: None,
             device_settings: None,
             pinned_library_keys: vec!["2".to_string(), "4".to_string()],
+            user_settings: UserSettings::default(),
         };
 
         let json = serde_json::to_string_pretty(&config).unwrap();
@@ -595,6 +772,7 @@ mod tests {
         assert_eq!(deserialized.default_server_id, Some("server-1".to_string()));
         assert!(deserialized.auth_token.is_none());
         assert_eq!(deserialized.pinned_library_keys, vec!["2".to_string(), "4".to_string()]);
+        assert_eq!(deserialized.user_settings.playback.quality, StreamQuality::Original);
     }
 
     #[test]
@@ -648,5 +826,195 @@ mod tests {
         }
         let result = check_rate_limit(&key);
         assert!(result.is_err());
+    }
+
+    // -- UserSettings tests --
+
+    #[test]
+    fn test_user_settings_defaults() {
+        let s = UserSettings::default();
+        assert_eq!(s.playback.quality, StreamQuality::Original);
+        assert!(!s.playback.auto_adjust_quality);
+        assert!(s.playback.preferred_codec.is_none());
+        assert!(s.playback.remember_volume);
+        assert!((s.playback.last_volume - 1.0).abs() < f64::EPSILON);
+        assert!((s.playback.playback_speed - 1.0).abs() < f64::EPSILON);
+
+        assert_eq!(s.audio.preferred_languages, vec!["eng", "en"]);
+        assert_eq!(s.audio.language_mismatch_action, MismatchAction::WarnDialog);
+
+        assert!(s.subtitles.preferred_languages.is_empty());
+        assert_eq!(s.subtitles.auto_enable, SubtitleAutoEnable::OnMismatch);
+        assert!(!s.subtitles.prefer_forced);
+    }
+
+    #[test]
+    fn test_user_settings_serialize_roundtrip() {
+        let mut s = UserSettings::default();
+        s.playback.quality = StreamQuality::Maximum(8_000);
+        s.playback.auto_adjust_quality = true;
+        s.playback.preferred_codec = Some("hevc".to_string());
+        s.playback.playback_speed = 1.5;
+        s.audio.preferred_languages = vec!["jpn".to_string(), "eng".to_string()];
+        s.audio.language_mismatch_action = MismatchAction::Pause;
+        s.subtitles.preferred_languages = vec!["eng".to_string()];
+        s.subtitles.auto_enable = SubtitleAutoEnable::Always;
+        s.subtitles.prefer_forced = true;
+
+        let json = serde_json::to_string_pretty(&s).unwrap();
+        let deserialized: UserSettings = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.playback.quality, StreamQuality::Maximum(8_000));
+        assert!(deserialized.playback.auto_adjust_quality);
+        assert_eq!(deserialized.playback.preferred_codec.as_deref(), Some("hevc"));
+        assert!((deserialized.playback.playback_speed - 1.5).abs() < f64::EPSILON);
+        assert_eq!(deserialized.audio.preferred_languages, vec!["jpn", "eng"]);
+        assert_eq!(deserialized.audio.language_mismatch_action, MismatchAction::Pause);
+        assert_eq!(deserialized.subtitles.preferred_languages, vec!["eng"]);
+        assert_eq!(deserialized.subtitles.auto_enable, SubtitleAutoEnable::Always);
+        assert!(deserialized.subtitles.prefer_forced);
+    }
+
+    #[test]
+    fn test_user_settings_backward_compat_empty_json() {
+        let json = "{}";
+        let s: UserSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.playback.quality, StreamQuality::Original);
+        assert_eq!(s.audio.preferred_languages, vec!["eng", "en"]);
+        assert_eq!(s.subtitles.auto_enable, SubtitleAutoEnable::OnMismatch);
+    }
+
+    #[test]
+    fn test_app_config_backward_compat_no_user_settings_field() {
+        let json = r#"{
+            "servers": [],
+            "default_server_id": null,
+            "client_id": "test"
+        }"#;
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.user_settings.playback.quality, StreamQuality::Original);
+        assert_eq!(config.user_settings.audio.preferred_languages, vec!["eng", "en"]);
+    }
+
+    #[test]
+    fn test_app_config_with_legacy_device_settings_still_deserializes() {
+        let json = r#"{
+            "servers": [],
+            "default_server_id": null,
+            "device_settings": {"quality": "original", "autoAdjustQuality": false}
+        }"#;
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        assert!(config.device_settings.is_some());
+        assert_eq!(config.user_settings.playback.quality, StreamQuality::Original);
+    }
+
+    #[test]
+    fn test_device_settings_not_serialized() {
+        let mut config = AppConfig::default();
+        config.device_settings = Some(serde_json::json!({"quality": "original"}));
+        let json = serde_json::to_string_pretty(&config).unwrap();
+        assert!(!json.contains("device_settings"));
+    }
+
+    #[test]
+    fn test_user_settings_is_serialized_in_config() {
+        let mut config = AppConfig::default();
+        config.user_settings.playback.quality = StreamQuality::Maximum(4_000);
+        let json = serde_json::to_string_pretty(&config).unwrap();
+        assert!(json.contains("user_settings"));
+        assert!(json.contains("4000"));
+    }
+
+    // -- StreamQuality tests --
+
+    #[test]
+    fn test_stream_quality_label_original() {
+        assert_eq!(StreamQuality::Original.label(), "Original");
+    }
+
+    #[test]
+    fn test_stream_quality_label_known_presets() {
+        assert_eq!(StreamQuality::Maximum(20_000).label(), "20 Mbps (4K)");
+        assert_eq!(StreamQuality::Maximum(12_000).label(), "12 Mbps (1080p)");
+        assert_eq!(StreamQuality::Maximum(8_000).label(), "8 Mbps (1080p)");
+        assert_eq!(StreamQuality::Maximum(4_000).label(), "4 Mbps (720p)");
+        assert_eq!(StreamQuality::Maximum(2_000).label(), "2 Mbps (480p)");
+    }
+
+    #[test]
+    fn test_stream_quality_label_custom_kbps() {
+        assert_eq!(StreamQuality::Maximum(6_000).label(), "6000 kbps");
+    }
+
+    #[test]
+    fn test_stream_quality_serde_roundtrip() {
+        let original = StreamQuality::Original;
+        let json = serde_json::to_string(&original).unwrap();
+        let back: StreamQuality = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, StreamQuality::Original);
+
+        let max = StreamQuality::Maximum(8_000);
+        let json = serde_json::to_string(&max).unwrap();
+        let back: StreamQuality = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, StreamQuality::Maximum(8_000));
+    }
+
+    // -- MismatchAction / SubtitleAutoEnable enum tests --
+
+    #[test]
+    fn test_mismatch_action_default() {
+        assert_eq!(MismatchAction::default(), MismatchAction::WarnDialog);
+    }
+
+    #[test]
+    fn test_mismatch_action_serde_roundtrip() {
+        for action in [MismatchAction::Pause, MismatchAction::WarnDialog, MismatchAction::Ignore] {
+            let json = serde_json::to_string(&action).unwrap();
+            let back: MismatchAction = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, action);
+        }
+    }
+
+    #[test]
+    fn test_subtitle_auto_enable_default() {
+        assert_eq!(SubtitleAutoEnable::default(), SubtitleAutoEnable::OnMismatch);
+    }
+
+    #[test]
+    fn test_subtitle_auto_enable_serde_roundtrip() {
+        for variant in [SubtitleAutoEnable::Always, SubtitleAutoEnable::OnMismatch, SubtitleAutoEnable::Never] {
+            let json = serde_json::to_string(&variant).unwrap();
+            let back: SubtitleAutoEnable = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, variant);
+        }
+    }
+
+    // -- PlaybackSettings default field tests --
+
+    #[test]
+    fn test_playback_settings_partial_json_uses_defaults() {
+        let json = r#"{"quality": "original"}"#;
+        let s: PlaybackSettings = serde_json::from_str(json).unwrap();
+        assert!(!s.auto_adjust_quality);
+        assert!(s.remember_volume);
+        assert!((s.last_volume - 1.0).abs() < f64::EPSILON);
+        assert!((s.playback_speed - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_audio_settings_partial_json_uses_defaults() {
+        let json = "{}";
+        let s: AudioSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.preferred_languages, vec!["eng", "en"]);
+        assert_eq!(s.language_mismatch_action, MismatchAction::WarnDialog);
+    }
+
+    #[test]
+    fn test_subtitle_settings_partial_json_uses_defaults() {
+        let json = "{}";
+        let s: SubtitleSettings = serde_json::from_str(json).unwrap();
+        assert!(s.preferred_languages.is_empty());
+        assert_eq!(s.auto_enable, SubtitleAutoEnable::OnMismatch);
+        assert!(!s.prefer_forced);
     }
 }

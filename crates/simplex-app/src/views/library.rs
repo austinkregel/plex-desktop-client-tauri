@@ -1,6 +1,6 @@
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, CheckButton, ComboBoxText, Label, ListBox, ListBoxRow, Orientation,
+    Box as GtkBox, CheckButton, ComboBoxText, FlowBox, FlowBoxChild, Label, Orientation,
     ScrolledWindow, SelectionMode, Spinner,
 };
 use simplex_core::api::library::{FilterOption, LibraryFilter, LibrarySection};
@@ -65,8 +65,13 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
     container.set_margin_start(8);
     container.set_margin_end(8);
 
-    let section_list = ListBox::new();
+    let section_list = FlowBox::new();
     section_list.set_selection_mode(SelectionMode::Single);
+    section_list.set_homogeneous(false);
+    section_list.set_min_children_per_line(1);
+    section_list.set_max_children_per_line(20);
+    section_list.set_row_spacing(4);
+    section_list.set_column_spacing(4);
 
     let filter_row = GtkBox::new(Orientation::Horizontal, 8);
     filter_row.set_margin_top(4);
@@ -148,9 +153,9 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
         let grid_sel = grid_area.clone();
         let current_sel = current_section_key.clone();
         let sections_sel = sections.clone();
-        section_list.connect_row_selected(move |_, row| {
-            if let Some(row) = row {
-                let key = row.widget_name().to_string();
+        section_list.connect_selected_children_changed(move |flow_box| {
+            if let Some(child) = flow_box.selected_children().first() {
+                let key = child.widget_name().to_string();
                 *current_sel.borrow_mut() = Some(key.clone());
                 let filter = controls_sel.current_filter();
                 let section_type = sections_sel
@@ -240,8 +245,8 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
             apply_sidebar_selection(&state_map, &section_list_map);
 
             if loaded_map.get() {
-                if let Some(row) = section_list_map.selected_row() {
-                    let key = row.widget_name().to_string();
+                if let Some(child) = section_list_map.selected_children().first() {
+                    let key = child.widget_name().to_string();
                     if let Some(opts) = cache_map.borrow().get(&key) {
                         apply_filter_options_to_controls(&controls_map, opts, &suppress_map);
                     }
@@ -280,22 +285,21 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                         list_after.remove(&child);
                     }
                     for section in &found {
-                        let row = ListBoxRow::new();
+                        let child = FlowBoxChild::new();
                         let label = Label::new(Some(&section.title));
-                        label.set_halign(gtk4::Align::Start);
-                        label.set_margin_start(8);
-                        label.set_margin_end(8);
-                        label.set_margin_top(6);
-                        label.set_margin_bottom(6);
-                        row.set_child(Some(&label));
-                        row.set_widget_name(&section.key);
-                        list_after.append(&row);
+                        label.set_margin_start(10);
+                        label.set_margin_end(10);
+                        label.set_margin_top(4);
+                        label.set_margin_bottom(4);
+                        child.set_child(Some(&label));
+                        child.set_widget_name(&section.key);
+                        list_after.append(&child);
                     }
 
                     apply_sidebar_selection(&state_after, &list_after);
-                    if list_after.selected_row().is_none() {
-                        if let Some(first) = list_after.row_at_index(0) {
-                            list_after.select_row(Some(&first));
+                    if list_after.selected_children().is_empty() {
+                        if let Some(first) = list_after.child_at_index(0) {
+                            list_after.select_child(&first);
                         }
                     }
                 }
@@ -309,9 +313,9 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
         let controls_opts = controls.clone();
         let cache_opts = filter_cache.clone();
         let suppress_opts = suppress_filter_events.clone();
-        section_list.connect_row_selected(move |_, row| {
-            let Some(row) = row else { return };
-            let section_key = row.widget_name().to_string();
+        section_list.connect_selected_children_changed(move |flow_box| {
+            let Some(child) = flow_box.selected_children().first().cloned() else { return };
+            let section_key = child.widget_name().to_string();
 
             if let Some(options) = cache_opts.borrow().get(&section_key).cloned() {
                 apply_filter_options_to_controls(&controls_opts, &options, &suppress_opts);
@@ -427,7 +431,7 @@ fn apply_filter_options_to_controls(
     suppress_events.set(false);
 }
 
-fn apply_sidebar_selection(state: &Arc<Mutex<AppState>>, section_list: &ListBox) {
+fn apply_sidebar_selection(state: &Arc<Mutex<AppState>>, section_list: &FlowBox) {
     let selected_key = {
         let s = state.lock().unwrap();
         s.selected_library_key.clone()
@@ -436,9 +440,9 @@ fn apply_sidebar_selection(state: &Arc<Mutex<AppState>>, section_list: &ListBox)
     if let Some(key) = selected_key {
         section_list.set_visible(false);
         let mut idx = 0;
-        while let Some(row) = section_list.row_at_index(idx) {
-            if row.widget_name() == key {
-                section_list.select_row(Some(&row));
+        while let Some(child) = section_list.child_at_index(idx) {
+            if child.widget_name() == key {
+                section_list.select_child(&child);
                 break;
             }
             idx += 1;

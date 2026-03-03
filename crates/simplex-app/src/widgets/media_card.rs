@@ -78,8 +78,9 @@ impl MediaCard {
         title_label.set_halign(gtk4::Align::Start);
         title_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
         title_label.set_max_width_chars(20);
-        title_label.set_margin_start(4);
-        title_label.set_margin_end(4);
+        title_label.set_margin_start(8);
+        title_label.set_margin_end(8);
+        title_label.set_margin_top(4);
         title_label.add_css_class("heading");
         card_box.append(&title_label);
 
@@ -88,8 +89,9 @@ impl MediaCard {
             sub_label.set_halign(gtk4::Align::Start);
             sub_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
             sub_label.set_max_width_chars(20);
-            sub_label.set_margin_start(4);
-            sub_label.set_margin_end(4);
+            sub_label.set_margin_start(8);
+            sub_label.set_margin_end(8);
+            sub_label.set_margin_bottom(4);
             sub_label.add_css_class("dim-label");
             card_box.append(&sub_label);
         }

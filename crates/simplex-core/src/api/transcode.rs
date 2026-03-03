@@ -139,6 +139,7 @@ mod tests {
                     streams: None,
                 }]),
             }]),
+            markers: vec![],
         }
     }
 

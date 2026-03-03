@@ -135,6 +135,7 @@ mod tests {
                 leaf_count: None,
                 viewed_leaf_count: None,
                 media: None,
+                markers: vec![],
             }).collect(),
         }
     }
@@ -246,6 +247,7 @@ mod tests {
                 leaf_count: None,
                 viewed_leaf_count: None,
                 media: None,
+                markers: vec![],
             }).collect(),
         }
     }
