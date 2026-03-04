@@ -44,7 +44,7 @@ fn switch_to_target(state: &Arc<Mutex<AppState>>, target: &NavTarget) {
     }
 }
 
-fn track_subtitle(item: &MetadataItem) -> Option<String> {
+pub(crate) fn track_subtitle(item: &MetadataItem) -> Option<String> {
     let artist = item.grandparent_title.as_deref().unwrap_or_default();
     let album = item.parent_title.as_deref().unwrap_or_default();
     match (artist.is_empty(), album.is_empty()) {
@@ -367,7 +367,18 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
             };
 
             let has_session = pipe.is_some() && playback_uri.is_some();
-            bar_tick.set_visible(has_session && view_name != "player");
+            let should_show = has_session && view_name != "player";
+            if bar_tick.is_visible() != should_show {
+                tracing::debug!(
+                    "mini_player visibility {} -> {} (pipeline={}, uri={}, view={})",
+                    bar_tick.is_visible(),
+                    should_show,
+                    pipe.is_some(),
+                    playback_uri.is_some(),
+                    view_name,
+                );
+            }
+            bar_tick.set_visible(should_show);
             if !has_session {
                 *last_rk_tick.borrow_mut() = None;
                 *last_art_tick.borrow_mut() = None;
@@ -448,4 +459,90 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
     }
 
     bar
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_item(
+        grandparent: Option<&str>,
+        parent: Option<&str>,
+    ) -> MetadataItem {
+        MetadataItem {
+            rating_key: "1".to_string(),
+            key: "/library/metadata/1".to_string(),
+            title: "Track".to_string(),
+            media_type: Some("track".to_string()),
+            grandparent_title: grandparent.map(String::from),
+            parent_title: parent.map(String::from),
+            summary: None,
+            thumb: None,
+            art: None,
+            parent_thumb: None,
+            grandparent_thumb: None,
+            duration: None,
+            added_at: None,
+            updated_at: None,
+            view_count: None,
+            rating: None,
+            audience_rating: None,
+            user_rating: None,
+            album_type: None,
+            parent_year: None,
+            last_viewed_at: None,
+            view_offset: None,
+            parent_rating_key: None,
+            grandparent_rating_key: None,
+            parent_index: None,
+            index: None,
+            leaf_count: None,
+            viewed_leaf_count: None,
+            media: None,
+            markers: vec![],
+            year: None,
+        }
+    }
+
+    #[test]
+    fn test_track_subtitle_both() {
+        let item = make_item(Some("Artist"), Some("Album"));
+        assert_eq!(track_subtitle(&item), Some("Artist - Album".to_string()));
+    }
+
+    #[test]
+    fn test_track_subtitle_artist_only() {
+        let item = make_item(Some("Artist"), None);
+        assert_eq!(track_subtitle(&item), Some("Artist".to_string()));
+    }
+
+    #[test]
+    fn test_track_subtitle_album_only() {
+        let item = make_item(None, Some("Album"));
+        assert_eq!(track_subtitle(&item), Some("Album".to_string()));
+    }
+
+    #[test]
+    fn test_track_subtitle_neither() {
+        let item = make_item(None, None);
+        assert_eq!(track_subtitle(&item), None);
+    }
+
+    #[test]
+    fn test_track_subtitle_empty_strings_treated_as_none() {
+        let mut item = make_item(None, None);
+        item.grandparent_title = Some("".to_string());
+        item.parent_title = Some("".to_string());
+        assert_eq!(track_subtitle(&item), None);
+    }
+
+    #[test]
+    fn test_format_time_delegates() {
+        assert_eq!(format_time(65.0), simplex_core::ui_utils::format_time(65.0));
+    }
+
+    #[test]
+    fn test_format_time_negative_clamped() {
+        assert_eq!(format_time(-10.0), simplex_core::ui_utils::format_time(0.0));
+    }
 }

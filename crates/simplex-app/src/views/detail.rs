@@ -596,7 +596,7 @@ fn append_artist_sections(
     }
 }
 
-fn format_duration(ms: u64) -> String {
+pub(crate) fn format_duration(ms: u64) -> String {
     let total_secs = ms / 1000;
     let h = total_secs / 3600;
     let m = (total_secs % 3600) / 60;
@@ -607,7 +607,7 @@ fn format_duration(ms: u64) -> String {
     }
 }
 
-fn capitalize(s: &str) -> String {
+pub(crate) fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
         None => String::new(),
@@ -615,7 +615,7 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-fn truncate_text(text: &str, max_chars: usize) -> String {
+pub(crate) fn truncate_text(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_string();
     }
@@ -835,14 +835,14 @@ fn build_seasons_grid(
     container.append(&grid.widget);
 }
 
-fn format_track_duration(ms: u64) -> String {
+pub(crate) fn format_track_duration(ms: u64) -> String {
     let total_secs = ms / 1000;
     let m = total_secs / 60;
     let s = total_secs % 60;
     format!("{}:{:02}", m, s)
 }
 
-fn pseudo_random_index(len: usize) -> usize {
+pub(crate) fn pseudo_random_index(len: usize) -> usize {
     if len == 0 {
         return 0;
     }
@@ -961,4 +961,110 @@ fn wire_play_button_for_item(
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_duration_hours_and_minutes() {
+        assert_eq!(format_duration(7_200_000), "2h 0m");
+    }
+
+    #[test]
+    fn test_format_duration_minutes_only() {
+        assert_eq!(format_duration(300_000), "5m");
+    }
+
+    #[test]
+    fn test_format_duration_zero() {
+        assert_eq!(format_duration(0), "0m");
+    }
+
+    #[test]
+    fn test_format_duration_mixed() {
+        assert_eq!(format_duration(5_400_000), "1h 30m");
+    }
+
+    #[test]
+    fn test_format_duration_seconds_ignored() {
+        assert_eq!(format_duration(90_500), "1m");
+    }
+
+    #[test]
+    fn test_capitalize_normal() {
+        assert_eq!(capitalize("hello"), "Hello");
+    }
+
+    #[test]
+    fn test_capitalize_empty() {
+        assert_eq!(capitalize(""), "");
+    }
+
+    #[test]
+    fn test_capitalize_already_upper() {
+        assert_eq!(capitalize("World"), "World");
+    }
+
+    #[test]
+    fn test_capitalize_single_char() {
+        assert_eq!(capitalize("a"), "A");
+    }
+
+    #[test]
+    fn test_truncate_text_short() {
+        assert_eq!(truncate_text("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_text_exact() {
+        assert_eq!(truncate_text("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_text_long() {
+        assert_eq!(truncate_text("hello world", 5), "hello...");
+    }
+
+    #[test]
+    fn test_truncate_text_empty() {
+        assert_eq!(truncate_text("", 5), "");
+    }
+
+    #[test]
+    fn test_format_track_duration_simple() {
+        assert_eq!(format_track_duration(65_000), "1:05");
+    }
+
+    #[test]
+    fn test_format_track_duration_zero() {
+        assert_eq!(format_track_duration(0), "0:00");
+    }
+
+    #[test]
+    fn test_format_track_duration_minutes() {
+        assert_eq!(format_track_duration(180_000), "3:00");
+    }
+
+    #[test]
+    fn test_format_track_duration_with_seconds() {
+        assert_eq!(format_track_duration(245_000), "4:05");
+    }
+
+    #[test]
+    fn test_pseudo_random_index_zero_len() {
+        assert_eq!(pseudo_random_index(0), 0);
+    }
+
+    #[test]
+    fn test_pseudo_random_index_one() {
+        assert_eq!(pseudo_random_index(1), 0);
+    }
+
+    #[test]
+    fn test_pseudo_random_index_in_range() {
+        let idx = pseudo_random_index(100);
+        assert!(idx < 100);
+    }
 }

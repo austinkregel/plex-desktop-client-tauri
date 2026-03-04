@@ -83,6 +83,28 @@ impl AppState {
     pub fn base_url(&self) -> Option<&str> {
         self.server.as_ref().map(|s| s.base_url.as_str())
     }
+
+    #[cfg(test)]
+    pub(crate) fn test_default() -> Self {
+        Self {
+            token: None,
+            server: None,
+            client_id: "test-client-id".to_string(),
+            view_stack: None,
+            header_bar: None,
+            split_view: None,
+            window: None,
+            current_item_key: None,
+            previous_view: None,
+            playback_uri: None,
+            playback_title: None,
+            playback_rating_key: None,
+            playback_offset: None,
+            selected_library_key: None,
+            playback_pipeline: None,
+            detail_parent_key: None,
+        }
+    }
 }
 
 /// Navigate to the detail page for a given item.
@@ -176,7 +198,9 @@ pub fn restore_chrome(state: &Arc<Mutex<AppState>>) {
         }
     }
     if let Some(vs) = view_stack {
-        vs.set_visible_child_name(&prev.unwrap_or_else(|| "detail".into()));
+        let target = prev.unwrap_or_else(|| "detail".into());
+        tracing::debug!("restore_chrome: switching to view '{}'", target);
+        vs.set_visible_child_name(&target);
     }
 }
 
@@ -220,11 +244,146 @@ pub fn leave_player(state: &Arc<Mutex<AppState>>) {
     restore_chrome(state);
 }
 
-fn uuid_string() -> String {
+pub(crate) fn uuid_string() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
     let bytes: [u8; 16] = rng.gen();
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_state() -> Arc<Mutex<AppState>> {
+        Arc::new(Mutex::new(AppState::test_default()))
+    }
+
+    fn test_state_with_playback() -> Arc<Mutex<AppState>> {
+        let state = test_state();
+        {
+            let mut s = state.lock().unwrap();
+            s.playback_uri = Some("http://example.com/stream".to_string());
+            s.playback_title = Some("Test Movie".to_string());
+            s.playback_rating_key = Some("12345".to_string());
+            s.playback_offset = Some(120.0);
+        }
+        state
+    }
+
+    #[test]
+    fn test_base_url_none_without_server() {
+        let state = AppState::test_default();
+        assert!(state.base_url().is_none());
+    }
+
+    #[test]
+    fn test_base_url_with_server() {
+        let mut state = AppState::test_default();
+        state.server = Some(ServerConfig {
+            id: "test-id".to_string(),
+            name: "Test".to_string(),
+            base_url: "http://localhost:32400".to_string(),
+            is_remote: false,
+            machine_identifier: None,
+        });
+        assert_eq!(state.base_url(), Some("http://localhost:32400"));
+    }
+
+    #[test]
+    fn test_uuid_string_length() {
+        let uuid = uuid_string();
+        assert_eq!(uuid.len(), 32);
+    }
+
+    #[test]
+    fn test_uuid_string_is_hex() {
+        let uuid = uuid_string();
+        assert!(uuid.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_uuid_string_unique() {
+        let a = uuid_string();
+        let b = uuid_string();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_stop_playback_session_clears_fields() {
+        let state = test_state_with_playback();
+        stop_playback_session(&state);
+        let s = state.lock().unwrap();
+        assert!(s.playback_uri.is_none());
+        assert!(s.playback_title.is_none());
+        assert!(s.playback_rating_key.is_none());
+        assert!(s.playback_offset.is_none());
+        assert!(s.playback_pipeline.is_none());
+    }
+
+    #[test]
+    fn test_navigate_to_detail_sets_key() {
+        let state = test_state();
+        navigate_to_detail(&state, "99", "library");
+        let s = state.lock().unwrap();
+        assert_eq!(s.current_item_key, Some("99".to_string()));
+        assert_eq!(s.previous_view, Some("library".to_string()));
+        assert!(s.detail_parent_key.is_none());
+    }
+
+    #[test]
+    fn test_navigate_to_player_sets_state() {
+        let state = test_state();
+        navigate_to_player(&state, "http://stream", "Title", Some("42"), Some(30.0));
+        let s = state.lock().unwrap();
+        assert_eq!(s.playback_uri, Some("http://stream".to_string()));
+        assert_eq!(s.playback_title, Some("Title".to_string()));
+        assert_eq!(s.playback_rating_key, Some("42".to_string()));
+        assert_eq!(s.playback_offset, Some(30.0));
+        assert_eq!(s.previous_view, Some("detail".to_string()));
+    }
+
+    #[test]
+    fn test_navigate_to_player_preserves_previous_view() {
+        let state = test_state();
+        {
+            let mut s = state.lock().unwrap();
+            s.previous_view = Some("library".to_string());
+        }
+        navigate_to_player(&state, "http://s", "T", None, None);
+        let s = state.lock().unwrap();
+        assert_eq!(s.previous_view, Some("library".to_string()));
+    }
+
+    #[test]
+    fn test_leave_player_clears_playback() {
+        let state = test_state_with_playback();
+        leave_player(&state);
+        let s = state.lock().unwrap();
+        assert!(s.playback_uri.is_none());
+        assert!(s.playback_title.is_none());
+        assert!(s.playback_rating_key.is_none());
+    }
+
+    #[test]
+    fn test_collapse_player_does_not_clear_playback() {
+        let state = test_state_with_playback();
+        collapse_player(&state);
+        let s = state.lock().unwrap();
+        assert!(s.playback_uri.is_some());
+    }
+
+    #[test]
+    fn test_restore_chrome_no_widgets_does_not_panic() {
+        let state = test_state();
+        restore_chrome(&state);
+    }
+
+    #[test]
+    fn test_return_to_player_no_widgets_does_not_panic() {
+        let state = test_state();
+        return_to_player(&state);
+    }
 }
 
 pub fn build_window(app: &Application) {

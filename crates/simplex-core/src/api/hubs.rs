@@ -9,6 +9,8 @@ const HUBS_TTL: CachePolicy = CachePolicy { ttl_secs: 60 };
 pub enum HubError {
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("{0}")]
+    Decode(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,7 +46,8 @@ pub async fn get_hubs(base_url: &str, token: &str) -> Result<Vec<Hub>, HubError>
 
     let client = super::plex_client(token)?;
     let url = format!("{}/hubs", base_url.trim_end_matches('/'));
-    let resp: HubsResponse = client.get(&url).send().await?.json().await?;
+    let raw = client.get(&url).send().await?;
+    let resp: HubsResponse = super::json_response(raw).await.map_err(HubError::Decode)?;
     let hubs = resp.media_container.hubs;
     cache::set(&key, &hubs);
     Ok(hubs)

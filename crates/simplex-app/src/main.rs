@@ -6,6 +6,9 @@ mod views;
 mod player;
 mod widgets;
 
+#[cfg(test)]
+mod test_smoke;
+
 fn main() {
     std::panic::set_hook(Box::new(|info| {
         let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {

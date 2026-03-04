@@ -1,5 +1,5 @@
 use gtk4::prelude::*;
-use gtk4::{Box as GtkBox, Label, Orientation, ScrolledWindow, Spinner};
+use gtk4::{Box as GtkBox, Button, Label, Orientation, ScrolledWindow, Spinner};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -15,7 +15,7 @@ struct HubData {
 
 enum HubResult {
     Ok(HubData),
-    Err(String),
+    Err { message: String, is_auth_failure: bool },
 }
 
 pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
@@ -95,12 +95,18 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                     })).await;
                 }
                 Err(e) => {
-                    tracing::error!("Failed to fetch hubs: {}", e);
-                    let _ = tx.send(HubResult::Err(
+                    let msg = format!("{e}");
+                    tracing::error!("Failed to fetch hubs: {}", msg);
+                    let is_auth = msg.contains("Unauthorized") || msg.contains("401");
+                    let user_msg = if is_auth {
+                        "Your Plex session has expired. Please sign in again."
+                    } else {
                         "Could not load your Plex home feed. Please check connectivity and try again."
-                            .to_string(),
-                    ))
-                    .await;
+                    };
+                    let _ = tx.send(HubResult::Err {
+                        message: user_msg.to_string(),
+                        is_auth_failure: is_auth,
+                    }).await;
                 }
             }
         });
@@ -109,6 +115,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
         let scroll2 = scroll_c.clone();
         let content2 = content_c.clone();
         let state_click = state_c.clone();
+        let loaded2 = loaded_c.clone();
         glib::spawn_future_local(async move {
             if let Ok(result) = rx.recv().await {
                 spinner2.set_visible(false);
@@ -139,12 +146,39 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                             content2.append(&grid.widget);
                         }
                     }
-                    HubResult::Err(err) => {
-                        let label = Label::new(Some(&err));
+                    HubResult::Err { message, is_auth_failure } => {
+                        let err_box = GtkBox::new(Orientation::Vertical, 12);
+                        err_box.set_halign(gtk4::Align::Center);
+                        err_box.set_valign(gtk4::Align::Center);
+                        err_box.set_vexpand(true);
+
+                        let label = Label::new(Some(&message));
                         label.add_css_class("dim-label");
                         label.set_halign(gtk4::Align::Center);
                         label.set_wrap(true);
-                        content2.append(&label);
+                        err_box.append(&label);
+
+                        if is_auth_failure {
+                            let _ = simplex_core::keychain::clear_auth_token();
+                            let mut s = state_click.lock().unwrap();
+                            s.token = None;
+                            drop(s);
+
+                            let sign_in_btn = Button::with_label("Sign In");
+                            sign_in_btn.add_css_class("suggested-action");
+                            sign_in_btn.add_css_class("pill");
+                            let state_login = state_click.clone();
+                            let loaded_login = loaded2.clone();
+                            sign_in_btn.connect_clicked(move |_| {
+                                loaded_login.set(false);
+                                if let Some(vs) = state_login.lock().unwrap().view_stack.clone() {
+                                    vs.set_visible_child_name("login");
+                                }
+                            });
+                            err_box.append(&sign_in_btn);
+                        }
+
+                        content2.append(&err_box);
                     }
                 }
             }

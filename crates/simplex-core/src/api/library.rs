@@ -14,6 +14,8 @@ pub enum LibraryError {
     Http(#[from] reqwest::Error),
     #[error("Parse error: {0}")]
     Parse(String),
+    #[error("{0}")]
+    Decode(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -333,7 +335,8 @@ pub async fn get_sections(base_url: &str, token: &str) -> Result<Vec<LibrarySect
 
     let client = super::plex_client(token)?;
     let url = format!("{}/library/sections", base_url.trim_end_matches('/'));
-    let resp: MediaContainer<LibrarySection> = client.get(&url).send().await?.json().await?;
+    let raw = client.get(&url).send().await?;
+    let resp: MediaContainer<LibrarySection> = super::json_response(raw).await.map_err(LibraryError::Decode)?;
     let sections = resp.media_container.directory;
     cache::set(&key, &sections);
     Ok(sections)
@@ -389,7 +392,8 @@ pub async fn get_section_items_filtered(
     if !query.is_empty() {
         req = req.query(&query);
     }
-    let resp: MediaContainer<MetadataItem> = req.send().await?.json().await?;
+    let raw = req.send().await?;
+    let resp: MediaContainer<MetadataItem> = super::json_response(raw).await.map_err(LibraryError::Decode)?;
     let items = resp.media_container.metadata;
     cache::set(&key, &items);
     Ok(items)
@@ -414,7 +418,8 @@ pub async fn get_filter_options(
         section_key,
         filter_type
     );
-    let resp: MediaContainer<FilterOption> = client.get(&url).send().await?.json().await?;
+    let raw = client.get(&url).send().await?;
+    let resp: MediaContainer<FilterOption> = super::json_response(raw).await.map_err(LibraryError::Decode)?;
     let options = resp.media_container.directory;
     cache::set(&key, &options);
     Ok(options)
@@ -433,7 +438,8 @@ pub async fn get_metadata(base_url: &str, token: &str, rating_key: &str) -> Resu
         base_url.trim_end_matches('/'),
         rating_key
     );
-    let resp: MediaContainer<MetadataItem> = client.get(&url).send().await?.json().await?;
+    let raw = client.get(&url).send().await?;
+    let resp: MediaContainer<MetadataItem> = super::json_response(raw).await.map_err(LibraryError::Decode)?;
     let item = resp.media_container.metadata.into_iter().next()
         .ok_or_else(|| LibraryError::Parse("No metadata found".to_string()))?;
     cache::set(&key, &item);
@@ -452,7 +458,8 @@ pub async fn get_children(base_url: &str, token: &str, rating_key: &str) -> Resu
 
     let client = super::plex_client(token)?;
     let url = format!("{}/library/metadata/{}/children", base_url.trim_end_matches('/'), rating_key);
-    let resp: MediaContainer<MetadataItem> = client.get(&url).send().await?.json().await?;
+    let raw = client.get(&url).send().await?;
+    let resp: MediaContainer<MetadataItem> = super::json_response(raw).await.map_err(LibraryError::Decode)?;
     let mut items = resp.media_container.metadata;
     items.extend(resp.media_container.directory);
     items.retain(|i| !i.rating_key.is_empty());
@@ -464,7 +471,8 @@ pub async fn get_children(base_url: &str, token: &str, rating_key: &str) -> Resu
 pub async fn get_collections(base_url: &str, token: &str, section_key: &str) -> Result<Vec<MetadataItem>, LibraryError> {
     let client = super::plex_client(token)?;
     let url = format!("{}/library/sections/{}/collections", base_url.trim_end_matches('/'), section_key);
-    let resp: MediaContainer<MetadataItem> = client.get(&url).send().await?.json().await?;
+    let raw = client.get(&url).send().await?;
+    let resp: MediaContainer<MetadataItem> = super::json_response(raw).await.map_err(LibraryError::Decode)?;
     Ok(resp.media_container.metadata)
 }
 

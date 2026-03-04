@@ -132,7 +132,7 @@ fn build_subtitle_section(
     off_radio.connect_toggled(move |btn| {
         if btn.is_active() {
             let p = pipe_off.lock().unwrap();
-            SubtitleManager::disable(&p);
+            SubtitleManager::disable(&*p);
         }
     });
     container.append(&off_radio);
@@ -152,7 +152,7 @@ fn build_subtitle_section(
         radio.connect_toggled(move |btn| {
             if btn.is_active() {
                 let p = pipe.lock().unwrap();
-                SubtitleManager::select_track(&p, idx);
+                SubtitleManager::select_track(&*p, idx);
             }
         });
         container.append(&radio);
@@ -187,7 +187,7 @@ fn build_speed_section(container: &GtkBox, pipe_arc: &Arc<Mutex<PlayerPipeline>>
 
 // ---- Helpers -------------------------------------------------------------
 
-fn track_label(index: i32, language: Option<&str>, title: Option<&str>) -> String {
+pub(crate) fn track_label(index: i32, language: Option<&str>, title: Option<&str>) -> String {
     match (language, title) {
         (Some(lang), Some(t)) => format!("{} — {}", lang.to_uppercase(), t),
         (Some(lang), None) => lang.to_uppercase(),
@@ -196,7 +196,7 @@ fn track_label(index: i32, language: Option<&str>, title: Option<&str>) -> Strin
     }
 }
 
-fn audio_track_label(index: i32, language: Option<&str>, title: Option<&str>, codec: Option<&str>) -> String {
+pub(crate) fn audio_track_label(index: i32, language: Option<&str>, title: Option<&str>, codec: Option<&str>) -> String {
     let base = match (language, title) {
         (Some(lang), Some(t)) => format!("{} — {}", lang.to_uppercase(), t),
         (Some(lang), None) => lang.to_uppercase(),
@@ -206,5 +206,77 @@ fn audio_track_label(index: i32, language: Option<&str>, title: Option<&str>, co
     match codec {
         Some(c) if language.is_none() && title.is_none() => format!("{} ({})", base, c),
         _ => base,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- track_label --------------------------------------------------------
+
+    #[test]
+    fn test_track_label_lang_and_title() {
+        assert_eq!(track_label(0, Some("eng"), Some("English")), "ENG — English");
+    }
+
+    #[test]
+    fn test_track_label_lang_only() {
+        assert_eq!(track_label(0, Some("spa"), None), "SPA");
+    }
+
+    #[test]
+    fn test_track_label_title_only() {
+        assert_eq!(track_label(0, None, Some("Commentary")), "Commentary");
+    }
+
+    #[test]
+    fn test_track_label_neither() {
+        assert_eq!(track_label(0, None, None), "Track 1");
+        assert_eq!(track_label(4, None, None), "Track 5");
+    }
+
+    #[test]
+    fn test_track_label_uppercase() {
+        assert_eq!(track_label(0, Some("fre"), None), "FRE");
+    }
+
+    // ---- audio_track_label --------------------------------------------------
+
+    #[test]
+    fn test_audio_track_label_lang_and_title_ignores_codec() {
+        assert_eq!(
+            audio_track_label(0, Some("eng"), Some("Surround"), Some("AAC")),
+            "ENG — Surround"
+        );
+    }
+
+    #[test]
+    fn test_audio_track_label_lang_only_ignores_codec() {
+        assert_eq!(
+            audio_track_label(0, Some("eng"), None, Some("AAC")),
+            "ENG"
+        );
+    }
+
+    #[test]
+    fn test_audio_track_label_no_lang_no_title_shows_codec() {
+        assert_eq!(
+            audio_track_label(0, None, None, Some("AAC")),
+            "Track 1 (AAC)"
+        );
+    }
+
+    #[test]
+    fn test_audio_track_label_no_lang_no_title_no_codec() {
+        assert_eq!(audio_track_label(2, None, None, None), "Track 3");
+    }
+
+    #[test]
+    fn test_audio_track_label_title_only_ignores_codec() {
+        assert_eq!(
+            audio_track_label(0, None, Some("Director's Commentary"), Some("MP3")),
+            "Director's Commentary"
+        );
     }
 }

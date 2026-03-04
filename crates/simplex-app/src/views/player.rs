@@ -41,8 +41,10 @@ fn playback_sync_context(state: &Arc<Mutex<AppState>>) -> Option<PlaybackSyncCon
     })
 }
 
+use crate::player::logic;
+
 fn secs_to_ms(value: f64) -> u64 {
-    (value.max(0.0) * 1000.0) as u64
+    logic::secs_to_ms(value)
 }
 
 fn sync_timeline_with_plex(
@@ -168,6 +170,7 @@ fn collapse_to_main(
     state: &Arc<Mutex<AppState>>,
     pip_window: &Rc<RefCell<Option<PipWindow>>>,
 ) {
+    tracing::debug!("collapse_to_main: hiding PiP and collapsing player");
     if let Some(ref pw) = *pip_window.borrow() {
         pw.hide();
     }
@@ -180,6 +183,7 @@ fn fetch_and_display_metadata(
     controls: &Rc<RefCell<Option<PlayerControls>>>,
     rating_key: &str,
     markers_out: &Rc<RefCell<Vec<Marker>>>,
+    media_type_out: &Rc<RefCell<Option<String>>>,
 ) {
     let (token, base_url) = {
         let s = state.lock().unwrap();
@@ -199,9 +203,11 @@ fn fetch_and_display_metadata(
 
     let ctrl_c = controls.clone();
     let markers_c = markers_out.clone();
+    let media_type_c = media_type_out.clone();
     glib::spawn_future_local(async move {
         match rx.recv().await {
             Ok(Ok(item)) => {
+                *media_type_c.borrow_mut() = item.media_type.clone();
                 *markers_c.borrow_mut() = item.markers.clone();
                 if !item.markers.is_empty() {
                     tracing::info!(
@@ -330,7 +336,7 @@ struct AdjacentCache {
     next_index: Option<u32>,
 }
 
-/// Switch playback to an adjacent episode.
+/// Switch playback to an adjacent episode/track.
 fn switch_episode(
     state: &Arc<Mutex<AppState>>,
     pipeline: &Rc<RefCell<Option<Arc<Mutex<PlayerPipeline>>>>>,
@@ -342,11 +348,15 @@ fn switch_episode(
     markers: &Rc<RefCell<Vec<Marker>>>,
     up_next_countdown: &Rc<Cell<Option<u8>>>,
     up_next_dismissed: &Rc<Cell<bool>>,
+    playback_error: &Arc<AtomicBool>,
+    media_type: &Rc<RefCell<Option<String>>>,
     uri: &str,
     title: &str,
     rating_key: &str,
 ) {
     sync_stop_state(state, pipeline, completion_scrobbled);
+    playback_error.store(false, Ordering::Relaxed);
+    *media_type.borrow_mut() = None;
     {
         let mut s = state.lock().unwrap();
         s.playback_uri = Some(uri.to_string());
@@ -377,7 +387,7 @@ fn switch_episode(
     }
 
     *adjacent_cache.borrow_mut() = None;
-    fetch_and_display_metadata(state, controls, rating_key, markers);
+    fetch_and_display_metadata(state, controls, rating_key, markers, media_type);
     fetch_adjacent_episodes(state, controls, rating_key, adjacent_cache);
 }
 
@@ -403,6 +413,8 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
     let up_next_dismissed: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let up_next_tick: Rc<Cell<u8>> = Rc::new(Cell::new(0));
     let skip_end_secs: Rc<Cell<Option<f64>>> = Rc::new(Cell::new(None));
+    let playback_error: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    let current_media_type: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
     let state_c = state.clone();
     let pipeline_c = pipeline.clone();
@@ -478,13 +490,24 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                 let state_bus = state_c.clone();
                 let pipe_bus = pipe.clone();
                 let completion_bus = completion_scrobbled_c.clone();
+                let error_bus = playback_error.clone();
                 let mut p = pipe.lock().unwrap();
                 p.connect_bus(move |msg| {
                     match msg {
                         MessageView::Error(e) => {
-                            tracing::error!("GStreamer error: {}", e.error());
+                            tracing::error!("GStreamer playback error: {}", e.error());
+                            if let Some(dbg_info) = e.debug() {
+                                tracing::debug!("GStreamer debug: {:?}", dbg_info);
+                            }
+                            error_bus.store(true, Ordering::Relaxed);
                         }
                         MessageView::Eos(_) => {
+                            if error_bus.load(Ordering::Relaxed) {
+                                tracing::warn!(
+                                    "End of stream after error — not auto-advancing"
+                                );
+                                return;
+                            }
                             tracing::info!("End of stream");
                             let (pos, dur) = {
                                 let p = pipe_bus.lock().unwrap();
@@ -511,6 +534,8 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                 let mk_eos = markers_c.clone();
                 let cd_eos = up_next_countdown_c.clone();
                 let dis_eos = up_next_dismissed_c.clone();
+                let err_eos = playback_error.clone();
+                let mt_eos = current_media_type.clone();
                 glib::spawn_future_local(async move {
                     while eos_rx.recv().await.is_ok() {
                         let info = {
@@ -526,10 +551,11 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                             })
                         };
                         if let Some((url, title, rk)) = info {
-                            tracing::info!("Auto-playing next episode: {}", title);
+                            tracing::info!("Auto-playing next: {}", title);
                             switch_episode(
                                 &s_eos, &pl_eos, &ctrl_eos, &ti_eos, &lu_eos,
                                 &adj_eos, &comp_eos, &mk_eos, &cd_eos, &dis_eos,
+                                &err_eos, &mt_eos,
                                 &url, &title, &rk,
                             );
                         }
@@ -614,6 +640,8 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                 let mk_prev = markers_c.clone();
                 let cd_prev = up_next_countdown_c.clone();
                 let dis_prev = up_next_dismissed_c.clone();
+                let err_prev = playback_error.clone();
+                let mt_prev = current_media_type.clone();
                 ctrl.prev_button.connect_clicked(move |_| {
                     let info = {
                         let cache = adj_prev.borrow();
@@ -628,6 +656,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                         switch_episode(
                             &s_prev, &pl_prev, &ctrl_prev, &ti_prev, &lu_prev,
                             &adj_prev, &completion_prev, &mk_prev, &cd_prev, &dis_prev,
+                            &err_prev, &mt_prev,
                             &url, &title, &rk,
                         );
                     }
@@ -646,6 +675,8 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                 let mk_next = markers_c.clone();
                 let cd_next = up_next_countdown_c.clone();
                 let dis_next = up_next_dismissed_c.clone();
+                let err_next = playback_error.clone();
+                let mt_next = current_media_type.clone();
                 ctrl.next_button.connect_clicked(move |_| {
                     let info = {
                         let cache = adj_next.borrow();
@@ -660,6 +691,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                         switch_episode(
                             &s_next, &pl_next, &ctrl_next, &ti_next, &lu_next,
                             &adj_next, &completion_next, &mk_next, &cd_next, &dis_next,
+                            &err_next, &mt_next,
                             &url, &title, &rk,
                         );
                     }
@@ -758,6 +790,8 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                 let mk_play = markers_c.clone();
                 let cd_play = up_next_countdown_c.clone();
                 let dis_play = up_next_dismissed_c.clone();
+                let err_play = playback_error.clone();
+                let mt_play = current_media_type.clone();
                 ctrl.up_next_play_button.connect_clicked(move |_| {
                     let info = {
                         let cache = adj_play.borrow();
@@ -772,6 +806,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                         switch_episode(
                             &s_play, &pl_play, &ctrl_play, &ti_play, &lu_play,
                             &adj_play, &comp_play, &mk_play, &cd_play, &dis_play,
+                            &err_play, &mt_play,
                             &url, &title, &rk,
                         );
                     }
@@ -877,6 +912,8 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
             up_next_dismissed_c.set(false);
             up_next_tick_c.set(0);
             skip_end_secs_c.set(None);
+            playback_error.store(false, Ordering::Relaxed);
+            *current_media_type.borrow_mut() = None;
 
             // Resume from offset after a brief delay so the pipeline reaches PLAYING
             if let Some(seek_pos) = offset {
@@ -924,6 +961,9 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
             let mk_auto = markers_c.clone();
             let cd_auto = up_next_countdown_c.clone();
             let dis_auto = up_next_dismissed_c.clone();
+            let err_auto = playback_error.clone();
+            let mt_auto = current_media_type.clone();
+            let mt_timer = current_media_type.clone();
             let id = glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
                 let mut auto_play_info: Option<(String, String, String)> = None;
 
@@ -1006,13 +1046,15 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                             ctrl.hide_skip_action();
                         }
 
-                        // Up Next: show when credits start (or near end of playback)
+                        // Up Next: show when credits start (or near end for episodes).
+                        // Music tracks auto-advance only on real EOS, not a countdown.
                         let has_next = {
                             let cache = adj_timer.borrow();
                             cache.as_ref().map_or(false, |c| c.next_url.is_some())
                         };
+                        let is_music = mt_timer.borrow().as_deref() == Some("track");
 
-                        if has_next && !dismissed_timer.get() {
+                        if has_next && !dismissed_timer.get() && !is_music {
                             let should_show_up_next = in_credits
                                 || dur.map_or(false, |d| d > 0.0 && position >= d - 30.0);
 
@@ -1078,6 +1120,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                         &state_timer, &pl_auto, &ctrl_timer, &ti_auto,
                         &lu_auto, &adj_timer, &comp_auto,
                         &mk_auto, &cd_auto, &dis_auto,
+                        &err_auto, &mt_auto,
                         &url, &title, &rk,
                     );
                 }
@@ -1089,7 +1132,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
 
         // Fetch metadata (with markers) and adjacent episodes
         if let Some(ref rk) = rating_key {
-            fetch_and_display_metadata(&state_c, &controls_c, rk, &markers_c);
+            fetch_and_display_metadata(&state_c, &controls_c, rk, &markers_c, &current_media_type);
             fetch_adjacent_episodes(&state_c, &controls_c, rk, &adjacent_c);
         }
     });

@@ -24,7 +24,7 @@ pub enum MediaCardStyle {
 }
 
 impl MediaCardStyle {
-    fn dimensions(self) -> (i32, i32) {
+    pub(crate) fn dimensions(self) -> (i32, i32) {
         match self {
             Self::Poster => (CARD_WIDTH, POSTER_HEIGHT),
             Self::Square => (SQUARE_CARD_SIZE, SQUARE_CARD_SIZE),
@@ -272,4 +272,35 @@ fn load_thumb_async(url: &str, picture: &Picture) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_poster_dimensions() {
+        let (w, h) = MediaCardStyle::Poster.dimensions();
+        assert!(w > 0);
+        assert!(h > 0);
+        assert!(h > w);
+    }
+
+    #[test]
+    fn test_square_dimensions() {
+        let (w, h) = MediaCardStyle::Square.dimensions();
+        assert_eq!(w, h);
+    }
+
+    #[test]
+    fn test_landscape_dimensions() {
+        let (w, h) = MediaCardStyle::Landscape.dimensions();
+        assert!(w > h);
+    }
+
+    #[test]
+    fn test_style_equality() {
+        assert_eq!(MediaCardStyle::Poster, MediaCardStyle::Poster);
+        assert_ne!(MediaCardStyle::Poster, MediaCardStyle::Square);
+    }
 }

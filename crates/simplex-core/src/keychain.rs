@@ -67,3 +67,70 @@ pub fn set_auth_token(token: &str) -> Result<(), KeychainError> {
     tracing::info!("Auth token stored successfully in keychain");
     Ok(())
 }
+
+/// Remove the auth token from the keychain.
+pub fn clear_auth_token() -> Result<(), KeychainError> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USERNAME)
+        .map_err(|e| KeychainError::Keyring(e.to_string()))?;
+    match entry.delete_password() {
+        Ok(()) => {
+            tracing::info!("Auth token cleared from keychain");
+            Ok(())
+        }
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(KeychainError::Keyring(e.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_keychain_error_display_keyring() {
+        let err = KeychainError::Keyring("no backend".to_string());
+        assert_eq!(format!("{err}"), "Keyring error: no backend");
+    }
+
+    #[test]
+    fn test_keychain_error_debug() {
+        let err = KeychainError::Keyring("test".to_string());
+        let dbg = format!("{err:?}");
+        assert!(dbg.contains("Keyring"));
+    }
+
+    #[test]
+    fn test_keychain_constants() {
+        assert_eq!(KEYCHAIN_SERVICE, "simplex");
+        assert_eq!(KEYCHAIN_USERNAME, "auth-token");
+    }
+
+    #[test]
+    fn test_get_token_returns_result() {
+        let result = get_token();
+        // On CI without a keyring backend this may error; we just verify it
+        // returns a valid Result variant rather than panicking.
+        match result {
+            Ok(None) => {}
+            Ok(Some(_)) => {}
+            Err(KeychainError::Keyring(_)) => {}
+            Err(e) => panic!("Unexpected error variant: {e:?}"),
+        }
+    }
+
+    #[test]
+    fn test_get_auth_token_does_not_panic() {
+        let _ = get_auth_token();
+    }
+
+    #[test]
+    fn test_set_auth_token_does_not_panic() {
+        // Uses the real keyring which may or may not be available.
+        let _ = set_auth_token("test-set-value");
+    }
+
+    #[test]
+    fn test_migrate_token_from_config_does_not_panic() {
+        let _ = migrate_token_from_config();
+    }
+}
