@@ -1,6 +1,6 @@
+use crate::cache::{self, CachePolicy};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use crate::cache::{self, CachePolicy};
 
 const SECTIONS_TTL: CachePolicy = CachePolicy { ttl_secs: 300 };
 const SECTION_ITEMS_TTL: CachePolicy = CachePolicy { ttl_secs: 90 };
@@ -247,7 +247,8 @@ impl MetadataItem {
     /// Returns the best available thumbnail path, falling back through
     /// thumb -> parentThumb -> grandparentThumb.
     pub fn best_thumb(&self) -> Option<&str> {
-        self.thumb.as_deref()
+        self.thumb
+            .as_deref()
             .or(self.parent_thumb.as_deref())
             .or(self.grandparent_thumb.as_deref())
     }
@@ -327,7 +328,10 @@ pub struct MediaStream {
 }
 
 /// Get all library sections (Movies, TV Shows, Music, etc.)
-pub async fn get_sections(base_url: &str, token: &str) -> Result<Vec<LibrarySection>, LibraryError> {
+pub async fn get_sections(
+    base_url: &str,
+    token: &str,
+) -> Result<Vec<LibrarySection>, LibraryError> {
     let key = format!("library:get_sections:{base_url}");
     if let Some(cached) = cache::get::<Vec<LibrarySection>>(&key, SECTIONS_TTL) {
         return Ok(cached);
@@ -336,14 +340,20 @@ pub async fn get_sections(base_url: &str, token: &str) -> Result<Vec<LibrarySect
     let client = super::plex_client(token)?;
     let url = format!("{}/library/sections", base_url.trim_end_matches('/'));
     let raw = client.get(&url).send().await?;
-    let resp: MediaContainer<LibrarySection> = super::json_response(raw).await.map_err(LibraryError::Decode)?;
+    let resp: MediaContainer<LibrarySection> = super::json_response(raw)
+        .await
+        .map_err(LibraryError::Decode)?;
     let sections = resp.media_container.directory;
     cache::set(&key, &sections);
     Ok(sections)
 }
 
 /// Get all items in a library section.
-pub async fn get_section_items(base_url: &str, token: &str, section_key: &str) -> Result<Vec<MetadataItem>, LibraryError> {
+pub async fn get_section_items(
+    base_url: &str,
+    token: &str,
+    section_key: &str,
+) -> Result<Vec<MetadataItem>, LibraryError> {
     get_section_items_filtered(base_url, token, section_key, &LibraryFilter::default()).await
 }
 
@@ -380,20 +390,29 @@ pub async fn get_section_items_filtered(
     section_key: &str,
     filter: &LibraryFilter,
 ) -> Result<Vec<MetadataItem>, LibraryError> {
-    let key = format!("library:get_section_items_filtered:{base_url}:{section_key}:{}", serde_json::to_string(filter).unwrap_or_default());
+    let key = format!(
+        "library:get_section_items_filtered:{base_url}:{section_key}:{}",
+        serde_json::to_string(filter).unwrap_or_default()
+    );
     if let Some(cached) = cache::get::<Vec<MetadataItem>>(&key, SECTION_ITEMS_TTL) {
         return Ok(cached);
     }
 
     let client = super::plex_client(token)?;
-    let url = format!("{}/library/sections/{}/all", base_url.trim_end_matches('/'), section_key);
+    let url = format!(
+        "{}/library/sections/{}/all",
+        base_url.trim_end_matches('/'),
+        section_key
+    );
     let query = build_library_filter_query(filter);
     let mut req = client.get(&url);
     if !query.is_empty() {
         req = req.query(&query);
     }
     let raw = req.send().await?;
-    let resp: MediaContainer<MetadataItem> = super::json_response(raw).await.map_err(LibraryError::Decode)?;
+    let resp: MediaContainer<MetadataItem> = super::json_response(raw)
+        .await
+        .map_err(LibraryError::Decode)?;
     let items = resp.media_container.metadata;
     cache::set(&key, &items);
     Ok(items)
@@ -419,14 +438,20 @@ pub async fn get_filter_options(
         filter_type
     );
     let raw = client.get(&url).send().await?;
-    let resp: MediaContainer<FilterOption> = super::json_response(raw).await.map_err(LibraryError::Decode)?;
+    let resp: MediaContainer<FilterOption> = super::json_response(raw)
+        .await
+        .map_err(LibraryError::Decode)?;
     let options = resp.media_container.directory;
     cache::set(&key, &options);
     Ok(options)
 }
 
 /// Get metadata for a specific item.
-pub async fn get_metadata(base_url: &str, token: &str, rating_key: &str) -> Result<MetadataItem, LibraryError> {
+pub async fn get_metadata(
+    base_url: &str,
+    token: &str,
+    rating_key: &str,
+) -> Result<MetadataItem, LibraryError> {
     let key = format!("library:get_metadata:{base_url}:{rating_key}");
     if let Some(cached) = cache::get::<MetadataItem>(&key, METADATA_TTL) {
         return Ok(cached);
@@ -439,8 +464,14 @@ pub async fn get_metadata(base_url: &str, token: &str, rating_key: &str) -> Resu
         rating_key
     );
     let raw = client.get(&url).send().await?;
-    let resp: MediaContainer<MetadataItem> = super::json_response(raw).await.map_err(LibraryError::Decode)?;
-    let item = resp.media_container.metadata.into_iter().next()
+    let resp: MediaContainer<MetadataItem> = super::json_response(raw)
+        .await
+        .map_err(LibraryError::Decode)?;
+    let item = resp
+        .media_container
+        .metadata
+        .into_iter()
+        .next()
         .ok_or_else(|| LibraryError::Parse("No metadata found".to_string()))?;
     cache::set(&key, &item);
     Ok(item)
@@ -450,16 +481,26 @@ pub async fn get_metadata(base_url: &str, token: &str, rating_key: &str) -> Resu
 /// Merges both `Metadata` and `Directory` arrays from the response since Plex
 /// returns container children (seasons, albums) in `Directory` and leaf
 /// children (episodes, tracks) in `Metadata`.
-pub async fn get_children(base_url: &str, token: &str, rating_key: &str) -> Result<Vec<MetadataItem>, LibraryError> {
+pub async fn get_children(
+    base_url: &str,
+    token: &str,
+    rating_key: &str,
+) -> Result<Vec<MetadataItem>, LibraryError> {
     let key = format!("library:get_children:{base_url}:{rating_key}");
     if let Some(cached) = cache::get::<Vec<MetadataItem>>(&key, CHILDREN_TTL) {
         return Ok(cached);
     }
 
     let client = super::plex_client(token)?;
-    let url = format!("{}/library/metadata/{}/children", base_url.trim_end_matches('/'), rating_key);
+    let url = format!(
+        "{}/library/metadata/{}/children",
+        base_url.trim_end_matches('/'),
+        rating_key
+    );
     let raw = client.get(&url).send().await?;
-    let resp: MediaContainer<MetadataItem> = super::json_response(raw).await.map_err(LibraryError::Decode)?;
+    let resp: MediaContainer<MetadataItem> = super::json_response(raw)
+        .await
+        .map_err(LibraryError::Decode)?;
     let mut items = resp.media_container.metadata;
     items.extend(resp.media_container.directory);
     items.retain(|i| !i.rating_key.is_empty());
@@ -468,11 +509,21 @@ pub async fn get_children(base_url: &str, token: &str, rating_key: &str) -> Resu
 }
 
 /// Get collections in a library section.
-pub async fn get_collections(base_url: &str, token: &str, section_key: &str) -> Result<Vec<MetadataItem>, LibraryError> {
+pub async fn get_collections(
+    base_url: &str,
+    token: &str,
+    section_key: &str,
+) -> Result<Vec<MetadataItem>, LibraryError> {
     let client = super::plex_client(token)?;
-    let url = format!("{}/library/sections/{}/collections", base_url.trim_end_matches('/'), section_key);
+    let url = format!(
+        "{}/library/sections/{}/collections",
+        base_url.trim_end_matches('/'),
+        section_key
+    );
     let raw = client.get(&url).send().await?;
-    let resp: MediaContainer<MetadataItem> = super::json_response(raw).await.map_err(LibraryError::Decode)?;
+    let resp: MediaContainer<MetadataItem> = super::json_response(raw)
+        .await
+        .map_err(LibraryError::Decode)?;
     Ok(resp.media_container.metadata)
 }
 
@@ -487,7 +538,11 @@ pub struct AdjacentEpisodes {
 /// previous, current, and next items. Returns `None` if the key is not found.
 pub fn find_adjacent(siblings: &[MetadataItem], rating_key: &str) -> Option<AdjacentEpisodes> {
     let pos = siblings.iter().position(|i| i.rating_key == rating_key)?;
-    let previous = if pos > 0 { Some(siblings[pos - 1].clone()) } else { None };
+    let previous = if pos > 0 {
+        Some(siblings[pos - 1].clone())
+    } else {
+        None
+    };
     let next = siblings.get(pos + 1).cloned();
     Some(AdjacentEpisodes {
         previous,
@@ -508,10 +563,12 @@ pub async fn get_adjacent_episodes(
 ) -> Result<AdjacentEpisodes, LibraryError> {
     let item = get_metadata(base_url, token, rating_key).await?;
 
-    let parent_rk = item.parent_rating_key.as_deref()
-        .ok_or_else(|| LibraryError::Parse(
-            format!("Item {} has no parentRatingKey -- cannot find siblings", rating_key)
-        ))?;
+    let parent_rk = item.parent_rating_key.as_deref().ok_or_else(|| {
+        LibraryError::Parse(format!(
+            "Item {} has no parentRatingKey -- cannot find siblings",
+            rating_key
+        ))
+    })?;
 
     let siblings = get_children(base_url, token, parent_rk).await?;
     find_adjacent(&siblings, rating_key)
@@ -520,7 +577,12 @@ pub async fn get_adjacent_episodes(
 
 /// Build the thumbnail URL for an item.
 pub fn thumb_url(base_url: &str, token: &str, thumb_path: &str) -> String {
-    format!("{}{}?X-Plex-Token={}", base_url.trim_end_matches('/'), thumb_path, token)
+    format!(
+        "{}{}?X-Plex-Token={}",
+        base_url.trim_end_matches('/'),
+        thumb_path,
+        token
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -532,8 +594,16 @@ pub struct ArtistDiscography {
 
 fn sort_popular_tracks(mut tracks: Vec<MetadataItem>) -> Vec<MetadataItem> {
     tracks.sort_by(|a, b| {
-        let a_score = a.user_rating.or(a.audience_rating).or(a.rating).unwrap_or(0.0);
-        let b_score = b.user_rating.or(b.audience_rating).or(b.rating).unwrap_or(0.0);
+        let a_score = a
+            .user_rating
+            .or(a.audience_rating)
+            .or(a.rating)
+            .unwrap_or(0.0);
+        let b_score = b
+            .user_rating
+            .or(b.audience_rating)
+            .or(b.rating)
+            .unwrap_or(0.0);
         b_score
             .partial_cmp(&a_score)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -582,7 +652,9 @@ pub async fn get_artist_discography(
     let mut all_tracks = Vec::new();
     for album in &artist_children {
         if album.media_type.as_deref() == Some("album") {
-            let mut tracks = get_children(base_url, token, &album.rating_key).await.unwrap_or_default();
+            let mut tracks = get_children(base_url, token, &album.rating_key)
+                .await
+                .unwrap_or_default();
             all_tracks.append(&mut tracks);
         }
     }
@@ -612,7 +684,9 @@ pub async fn get_next_episode(
     seasons.sort_by_key(|s| s.index.unwrap_or(u32::MAX));
 
     for season in &seasons {
-        let mut episodes = get_children(base_url, token, &season.rating_key).await.unwrap_or_default();
+        let mut episodes = get_children(base_url, token, &season.rating_key)
+            .await
+            .unwrap_or_default();
         episodes.sort_by_key(|e| e.index.unwrap_or(u32::MAX));
 
         // Prefer a partially-watched episode first (resume point).
@@ -705,7 +779,10 @@ mod tests {
         }"#;
         let container: MediaContainer<MetadataItem> = serde_json::from_str(json).unwrap();
         let item = &container.media_container.metadata[0];
-        assert_eq!(item.guid.as_deref(), Some("plex://movie/5d776824880197001ec967c1"));
+        assert_eq!(
+            item.guid.as_deref(),
+            Some("plex://movie/5d776824880197001ec967c1")
+        );
         assert_eq!(item.external_guids.len(), 3);
         assert_eq!(item.external_guids[0].id, "imdb://tt0133093");
         assert_eq!(item.external_guids[1].id, "tmdb://603");
@@ -767,8 +844,15 @@ mod tests {
 
     #[test]
     fn test_thumb_url() {
-        let url = thumb_url("http://localhost:32400", "mytoken", "/library/metadata/123/thumb/456");
-        assert_eq!(url, "http://localhost:32400/library/metadata/123/thumb/456?X-Plex-Token=mytoken");
+        let url = thumb_url(
+            "http://localhost:32400",
+            "mytoken",
+            "/library/metadata/123/thumb/456",
+        );
+        assert_eq!(
+            url,
+            "http://localhost:32400/library/metadata/123/thumb/456?X-Plex-Token=mytoken"
+        );
     }
 
     #[test]
@@ -1044,10 +1128,7 @@ mod tests {
 
     #[test]
     fn test_find_adjacent_first_has_no_prev() {
-        let episodes = vec![
-            make_episode("10", "Ep1"),
-            make_episode("11", "Ep2"),
-        ];
+        let episodes = vec![make_episode("10", "Ep1"), make_episode("11", "Ep2")];
         let result = find_adjacent(&episodes, "10").unwrap();
         assert!(result.previous.is_none());
         assert_eq!(result.next.as_ref().unwrap().rating_key, "11");
@@ -1055,10 +1136,7 @@ mod tests {
 
     #[test]
     fn test_find_adjacent_last_has_no_next() {
-        let episodes = vec![
-            make_episode("10", "Ep1"),
-            make_episode("11", "Ep2"),
-        ];
+        let episodes = vec![make_episode("10", "Ep1"), make_episode("11", "Ep2")];
         let result = find_adjacent(&episodes, "11").unwrap();
         assert_eq!(result.previous.as_ref().unwrap().rating_key, "10");
         assert!(result.next.is_none());
@@ -1116,7 +1194,10 @@ mod tests {
         assert_eq!(items[0].rating_key, "500");
         assert_eq!(items[0].title, "Marvel Cinematic Universe");
         assert_eq!(items[0].media_type, Some("collection".to_string()));
-        assert_eq!(items[0].summary, Some("All MCU films in release order.".to_string()));
+        assert_eq!(
+            items[0].summary,
+            Some("All MCU films in release order.".to_string())
+        );
         assert_eq!(items[1].title, "Star Wars");
     }
 

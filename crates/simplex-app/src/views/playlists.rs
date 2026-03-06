@@ -54,13 +54,15 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
 
         loaded_c.set(true);
 
-        let (tx, rx) = async_channel::unbounded::<(Vec<simplex_core::api::playlists::Playlist>, String, String)>();
+        let (tx, rx) = async_channel::unbounded::<(
+            Vec<simplex_core::api::playlists::Playlist>,
+            String,
+            String,
+        )>();
         let bu = base_url.clone();
         let tk = token.clone();
         crate::app::runtime().spawn(async move {
-            if let Ok(playlists) =
-                simplex_core::api::playlists::get_playlists(&bu, &tk).await
-            {
+            if let Ok(playlists) = simplex_core::api::playlists::get_playlists(&bu, &tk).await {
                 let _ = tx.send((playlists, bu, tk)).await;
             }
         });
@@ -78,12 +80,17 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                 });
                 let grid = PosterGrid::new();
                 for pl in &playlists {
-                    let thumb = pl.thumb.as_deref()
+                    let thumb = pl
+                        .thumb
+                        .as_deref()
                         .map(|t| simplex_core::api::library::thumb_url(&base_url, &token, t));
                     let subtitle = pl.leaf_count.map(|c| format!("{} items", c));
                     grid.add_entry_interactive(
-                        &pl.title, subtitle.as_deref(), thumb.as_deref(),
-                        &pl.rating_key, &on_click,
+                        &pl.title,
+                        subtitle.as_deref(),
+                        thumb.as_deref(),
+                        &pl.rating_key,
+                        &on_click,
                     );
                 }
                 content2.append(&grid.widget);

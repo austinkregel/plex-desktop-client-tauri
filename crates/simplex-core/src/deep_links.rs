@@ -194,8 +194,7 @@ pub fn extract_direct_web_url_from_deep_link(deep_link: &str) -> Option<String> 
         return None;
     }
 
-    let is_open =
-        parsed.host_str() == Some("open") || parsed.path().eq_ignore_ascii_case("/open");
+    let is_open = parsed.host_str() == Some("open") || parsed.path().eq_ignore_ascii_case("/open");
     if !is_open {
         return None;
     }
@@ -317,10 +316,7 @@ mod tests {
             result.server_id,
             Some("5e30efc7d6347d6365e8a4f11c03fd3fc334fd60".to_string())
         );
-        assert_eq!(
-            result.key,
-            Some("/library/metadata/102033".to_string())
-        );
+        assert_eq!(result.key, Some("/library/metadata/102033".to_string()));
         assert!(result.extra_query.is_some());
         assert!(result.extra_query.unwrap().contains("context"));
 
@@ -328,9 +324,7 @@ mod tests {
         let result = parse_deep_link("simplex://auth?token=abc123").unwrap();
         assert!(result.base_url.is_some());
         let base_url_str = result.base_url.unwrap();
-        assert!(
-            base_url_str.contains("oauth://token") || base_url_str.contains("token=abc123")
-        );
+        assert!(base_url_str.contains("oauth://token") || base_url_str.contains("token=abc123"));
 
         // Format 3: baseUrl override
         let result = parse_deep_link(
@@ -376,7 +370,8 @@ mod tests {
         let encoded_custom_port = urlencoding::encode(
             "http://localhost:8080/web/index.html#!/details?key=/library/metadata/789",
         );
-        let result = parse_deep_link(&format!("simplex://open?url={}", encoded_custom_port)).unwrap();
+        let result =
+            parse_deep_link(&format!("simplex://open?url={}", encoded_custom_port)).unwrap();
         assert_eq!(result.base_url, Some("http://localhost:8080".to_string()));
     }
 
@@ -472,15 +467,22 @@ mod tests {
 
     #[test]
     fn test_extract_direct_web_url_from_deep_link() {
-        let encoded = urlencoding::encode("https://192.168.1.100:32400/web/index.html#!/details?key=/library/metadata/123");
-        let result = extract_direct_web_url_from_deep_link(&format!("simplex://open?url={}", encoded));
+        let encoded = urlencoding::encode(
+            "https://192.168.1.100:32400/web/index.html#!/details?key=/library/metadata/123",
+        );
+        let result =
+            extract_direct_web_url_from_deep_link(&format!("simplex://open?url={}", encoded));
         assert_eq!(
             result,
-            Some("https://192.168.1.100:32400/web/index.html#!/details?key=/library/metadata/123".to_string())
+            Some(
+                "https://192.168.1.100:32400/web/index.html#!/details?key=/library/metadata/123"
+                    .to_string()
+            )
         );
 
         // plex-desktop backwards compatibility
-        let result = extract_direct_web_url_from_deep_link(&format!("plex-desktop://open?url={}", encoded));
+        let result =
+            extract_direct_web_url_from_deep_link(&format!("plex-desktop://open?url={}", encoded));
         assert!(result.is_some());
 
         // Wrong scheme

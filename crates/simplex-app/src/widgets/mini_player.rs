@@ -76,11 +76,15 @@ async fn resolve_context(base_url: &str, token: &str, rating_key: &str) -> MiniC
 
     match item.media_type.as_deref() {
         Some("episode") => {
-            if let Ok(adjacent) = library::get_adjacent_episodes(base_url, token, rating_key).await {
+            if let Ok(adjacent) = library::get_adjacent_episodes(base_url, token, rating_key).await
+            {
                 if let Some(prev_item) = adjacent.previous {
-                    if let Some(uri) =
-                        transcode::playback_url_for_item(&prev_item, base_url, token, "simplex-session")
-                    {
+                    if let Some(uri) = transcode::playback_url_for_item(
+                        &prev_item,
+                        base_url,
+                        token,
+                        "simplex-session",
+                    ) {
                         ctx.prev = Some(NavTarget {
                             uri,
                             title: prev_item.title,
@@ -89,9 +93,12 @@ async fn resolve_context(base_url: &str, token: &str, rating_key: &str) -> MiniC
                     }
                 }
                 if let Some(next_item) = adjacent.next {
-                    if let Some(uri) =
-                        transcode::playback_url_for_item(&next_item, base_url, token, "simplex-session")
-                    {
+                    if let Some(uri) = transcode::playback_url_for_item(
+                        &next_item,
+                        base_url,
+                        token,
+                        "simplex-session",
+                    ) {
                         ctx.next = Some(NavTarget {
                             uri,
                             title: next_item.title,
@@ -106,12 +113,17 @@ async fn resolve_context(base_url: &str, token: &str, rating_key: &str) -> MiniC
                 if let Ok(mut tracks) = library::get_children(base_url, token, parent_key).await {
                     tracks.retain(|t| t.media_type.as_deref() == Some("track"));
                     tracks.sort_by_key(|t| t.index.unwrap_or(0));
-                    if let Some(current_idx) = tracks.iter().position(|t| t.rating_key == item.rating_key) {
+                    if let Some(current_idx) =
+                        tracks.iter().position(|t| t.rating_key == item.rating_key)
+                    {
                         if current_idx > 0 {
                             let prev_item = tracks[current_idx - 1].clone();
-                            if let Some(uri) =
-                                transcode::playback_url_for_item(&prev_item, base_url, token, "simplex-session")
-                            {
+                            if let Some(uri) = transcode::playback_url_for_item(
+                                &prev_item,
+                                base_url,
+                                token,
+                                "simplex-session",
+                            ) {
                                 ctx.prev = Some(NavTarget {
                                     uri,
                                     title: prev_item.title,
@@ -121,9 +133,12 @@ async fn resolve_context(base_url: &str, token: &str, rating_key: &str) -> MiniC
                         }
                         if current_idx + 1 < tracks.len() {
                             let next_item = tracks[current_idx + 1].clone();
-                            if let Some(uri) =
-                                transcode::playback_url_for_item(&next_item, base_url, token, "simplex-session")
-                            {
+                            if let Some(uri) = transcode::playback_url_for_item(
+                                &next_item,
+                                base_url,
+                                token,
+                                "simplex-session",
+                            ) {
                                 ctx.next = Some(NavTarget {
                                     uri,
                                     title: next_item.title,
@@ -275,9 +290,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
     {
         let state_pp = state.clone();
         play_pause.connect_clicked(move |_| {
-            let pipe = {
-                state_pp.lock().unwrap().playback_pipeline.clone()
-            };
+            let pipe = { state_pp.lock().unwrap().playback_pipeline.clone() };
             if let Some(pipe) = pipe {
                 let p = pipe.lock().unwrap();
                 p.toggle_play_pause();
@@ -303,9 +316,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
             if seek_updating_flag.get() {
                 return;
             }
-            let pipe = {
-                state_seek.lock().unwrap().playback_pipeline.clone()
-            };
+            let pipe = { state_seek.lock().unwrap().playback_pipeline.clone() };
             if let Some(pipe) = pipe {
                 let p = pipe.lock().unwrap();
                 if let Some(dur) = p.duration() {
@@ -350,7 +361,15 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
         let last_rk_tick = last_rating_key.clone();
         let last_art_tick = last_artwork_url.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
-            let (pipe, playback_title, playback_uri, playback_rating_key, view_name, token, base_url) = {
+            let (
+                pipe,
+                playback_title,
+                playback_uri,
+                playback_rating_key,
+                view_name,
+                token,
+                base_url,
+            ) = {
                 let s = state_tick.lock().unwrap();
                 (
                     s.playback_pipeline.clone(),
@@ -465,15 +484,15 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
 mod tests {
     use super::*;
 
-    fn make_item(
-        grandparent: Option<&str>,
-        parent: Option<&str>,
-    ) -> MetadataItem {
+    fn make_item(grandparent: Option<&str>, parent: Option<&str>) -> MetadataItem {
         MetadataItem {
             rating_key: "1".to_string(),
             key: "/library/metadata/1".to_string(),
+            guid: None,
+            external_guids: vec![],
             title: "Track".to_string(),
             media_type: Some("track".to_string()),
+            originally_available_at: None,
             grandparent_title: grandparent.map(String::from),
             parent_title: parent.map(String::from),
             summary: None,

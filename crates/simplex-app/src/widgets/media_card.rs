@@ -190,26 +190,10 @@ fn is_in_viewport(scroll: &ScrolledWindow, widget: &Picture) -> bool {
     }
 }
 
-/// Walks up the widget tree from `widget` to `ancestor`, accumulating
-/// allocation y-offsets to compute the widget's vertical position
-/// within the ancestor's coordinate space.
-fn widget_y_in_ancestor(
-    widget: &impl IsA<gtk4::Widget>,
-    ancestor: &gtk4::Widget,
-) -> Option<f64> {
-    let mut y = 0.0;
-    let mut current: gtk4::Widget = widget.clone().upcast();
-
-    loop {
-        if &current == ancestor {
-            return Some(y);
-        }
-        y += current.allocation().y() as f64;
-        match current.parent() {
-            Some(p) => current = p,
-            None => return None,
-        }
-    }
+fn widget_y_in_ancestor(widget: &impl IsA<gtk4::Widget>, ancestor: &gtk4::Widget) -> Option<f64> {
+    widget
+        .compute_point(ancestor, &gtk4::graphene::Point::new(0.0, 0.0))
+        .map(|point| point.y() as f64)
 }
 
 fn load_thumb_async(url: &str, picture: &Picture) {

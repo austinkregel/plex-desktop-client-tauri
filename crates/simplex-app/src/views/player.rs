@@ -1,10 +1,10 @@
 use gstreamer::MessageView;
 use gtk4::prelude::*;
-use libadwaita::prelude::*;
 use gtk4::{Box as GtkBox, Button, Label, Orientation};
+use libadwaita::prelude::*;
+use simplex_core::api::library::Marker;
 use simplex_core::api::playback::TimelineState;
 use simplex_core::media::TrackPreference;
-use simplex_core::api::library::Marker;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,10 +12,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::player::controls::PlayerControls;
+use crate::player::logic::handle_settings_event;
 use crate::player::pip::PipWindow;
 use crate::player::pipeline::PlayerPipeline;
 use crate::player::track_monitor::{MismatchWarning, TrackMonitor};
-use crate::window::AppState;
+use crate::window::{AppState, SettingsEvent};
 
 const TIMELINE_SYNC_INTERVAL: Duration = Duration::from_secs(5);
 const WATCHED_COMPLETION_THRESHOLD: f64 = 0.90;
@@ -115,10 +116,20 @@ fn sync_completion_with_plex(
         crate::app::runtime().spawn(async move {
             let result = match action {
                 CompletionAction::Scrobble => {
-                    simplex_core::api::playback::scrobble(&ctx.base_url, &ctx.token, &ctx.rating_key).await
+                    simplex_core::api::playback::scrobble(
+                        &ctx.base_url,
+                        &ctx.token,
+                        &ctx.rating_key,
+                    )
+                    .await
                 }
                 CompletionAction::Unscrobble => {
-                    simplex_core::api::playback::unscrobble(&ctx.base_url, &ctx.token, &ctx.rating_key).await
+                    simplex_core::api::playback::unscrobble(
+                        &ctx.base_url,
+                        &ctx.token,
+                        &ctx.rating_key,
+                    )
+                    .await
                 }
             };
             if let Err(e) = result {
@@ -166,10 +177,7 @@ fn stop_and_leave(
     crate::window::leave_player(state);
 }
 
-fn collapse_to_main(
-    state: &Arc<Mutex<AppState>>,
-    pip_window: &Rc<RefCell<Option<PipWindow>>>,
-) {
+fn collapse_to_main(state: &Arc<Mutex<AppState>>, pip_window: &Rc<RefCell<Option<PipWindow>>>) {
     tracing::debug!("collapse_to_main: hiding PiP and collapsing player");
     if let Some(ref pw) = *pip_window.borrow() {
         pw.hide();
@@ -210,15 +218,10 @@ fn fetch_and_display_metadata(
                 *media_type_c.borrow_mut() = item.media_type.clone();
                 *markers_c.borrow_mut() = item.markers.clone();
                 if !item.markers.is_empty() {
-                    tracing::info!(
-                        "Loaded {} marker(s) for {}",
-                        item.markers.len(),
-                        item.title
-                    );
+                    tracing::info!("Loaded {} marker(s) for {}", item.markers.len(), item.title);
                 }
                 if let Some(ref ctrl) = *ctrl_c.borrow() {
-                    let show_name = item.grandparent_title.as_deref()
-                        .unwrap_or(&item.title);
+                    let show_name = item.grandparent_title.as_deref().unwrap_or(&item.title);
                     let episode_line = if item.grandparent_title.is_some() {
                         let mut ep = String::new();
                         if let (Some(si), Some(ei)) = (item.parent_index, item.index) {
@@ -277,8 +280,14 @@ fn fetch_adjacent_episodes(
             Ok(Ok(adj)) => {
                 tracing::info!(
                     "Adjacent episodes: prev={}, next={}",
-                    adj.previous.as_ref().map(|i| i.title.as_str()).unwrap_or("none"),
-                    adj.next.as_ref().map(|i| i.title.as_str()).unwrap_or("none"),
+                    adj.previous
+                        .as_ref()
+                        .map(|i| i.title.as_str())
+                        .unwrap_or("none"),
+                    adj.next
+                        .as_ref()
+                        .map(|i| i.title.as_str())
+                        .unwrap_or("none"),
                 );
 
                 let prev_key = adj.previous.as_ref().map(|i| i.rating_key.clone());
@@ -286,12 +295,18 @@ fn fetch_adjacent_episodes(
 
                 let prev_url = adj.previous.as_ref().and_then(|item| {
                     simplex_core::api::transcode::playback_url_for_item(
-                        item, &base_url_c, &token_c, "simplex-session",
+                        item,
+                        &base_url_c,
+                        &token_c,
+                        "simplex-session",
                     )
                 });
                 let next_url = adj.next.as_ref().and_then(|item| {
                     simplex_core::api::transcode::playback_url_for_item(
-                        item, &base_url_c, &token_c, "simplex-session",
+                        item,
+                        &base_url_c,
+                        &token_c,
+                        "simplex-session",
                     )
                 });
 
@@ -378,7 +393,8 @@ fn switch_episode(
     }
 
     if let Some(ref ctrl) = *controls.borrow() {
-        ctrl.play_pause_button.set_icon_name("media-playback-pause-symbolic");
+        ctrl.play_pause_button
+            .set_icon_name("media-playback-pause-symbolic");
         ctrl.title_label.set_text(title);
         ctrl.prev_button.set_sensitive(false);
         ctrl.next_button.set_sensitive(false);
@@ -397,8 +413,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
     container.set_hexpand(true);
     container.add_css_class("player-view");
 
-    let pipeline: Rc<RefCell<Option<Arc<Mutex<PlayerPipeline>>>>> =
-        Rc::new(RefCell::new(None));
+    let pipeline: Rc<RefCell<Option<Arc<Mutex<PlayerPipeline>>>>> = Rc::new(RefCell::new(None));
     let controls: Rc<RefCell<Option<PlayerControls>>> = Rc::new(RefCell::new(None));
     let pip_window: Rc<RefCell<Option<PipWindow>>> = Rc::new(RefCell::new(None));
     let timer_id: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
@@ -836,10 +851,43 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
             let user_settings = simplex_core::config::load_user_settings();
             let preference = TrackPreference::from_user_settings(&user_settings);
 
+            {
+                let p = pipe.lock().unwrap();
+                p.set_preferred_audio_languages(
+                    user_settings.audio.preferred_languages.clone(),
+                );
+            }
+
             let (warn_tx, warn_rx) = async_channel::unbounded::<MismatchWarning>();
             let mut monitor = TrackMonitor::new(preference);
             monitor.set_warning_sender(warn_tx);
             monitor.connect(&pipe);
+
+            // Subscribe to real-time settings changes from the Settings page.
+            {
+                let session_arc = monitor.session().clone();
+                let pipe_settings = pipe.clone();
+                let settings_rx = state_c.lock().unwrap().settings_event_rx.take();
+                if let Some(rx) = settings_rx {
+                    glib::spawn_future_local(async move {
+                        while let Ok(event) = rx.recv().await {
+                            let needs_apply = matches!(
+                                &event,
+                                SettingsEvent::AudioLanguagesChanged(_)
+                            );
+                            {
+                                let p = pipe_settings.lock().unwrap();
+                                let mut sess = session_arc.lock().unwrap();
+                                handle_settings_event(&*p, &mut sess, event);
+                            }
+                            if needs_apply {
+                                let p = pipe_settings.lock().unwrap();
+                                p.apply_preferred_audio_language();
+                            }
+                        }
+                    });
+                }
+            }
 
             // Listen for language-mismatch warnings and show an adw::AlertDialog.
             {
@@ -1152,15 +1200,21 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                     p.toggle_play_pause();
                     sync_timeline_with_plex(
                         &state_key,
-                        if p.is_playing() { TimelineState::Playing } else { TimelineState::Paused },
+                        if p.is_playing() {
+                            TimelineState::Playing
+                        } else {
+                            TimelineState::Paused
+                        },
                         p.position(),
                         p.duration(),
                     );
                     if let Some(ref ctrl) = *controls_key.borrow() {
                         if p.is_playing() {
-                            ctrl.play_pause_button.set_icon_name("media-playback-pause-symbolic");
+                            ctrl.play_pause_button
+                                .set_icon_name("media-playback-pause-symbolic");
                         } else {
-                            ctrl.play_pause_button.set_icon_name("media-playback-start-symbolic");
+                            ctrl.play_pause_button
+                                .set_icon_name("media-playback-start-symbolic");
                         }
                     }
                 }
@@ -1171,9 +1225,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                 glib::Propagation::Stop
             }
             k if k == Key::F11 => {
-                let window = {
-                    state_key.lock().unwrap().window.clone()
-                };
+                let window = { state_key.lock().unwrap().window.clone() };
                 if let Some(w) = window {
                     if w.is_fullscreen() {
                         w.set_fullscreened(false);
@@ -1190,7 +1242,11 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                         p.seek((pos - 10.0).max(0.0));
                         sync_timeline_with_plex(
                             &state_key,
-                            if p.is_playing() { TimelineState::Playing } else { TimelineState::Paused },
+                            if p.is_playing() {
+                                TimelineState::Playing
+                            } else {
+                                TimelineState::Paused
+                            },
                             p.position(),
                             p.duration(),
                         );
@@ -1206,7 +1262,11 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                         p.seek((pos + 10.0).min(dur));
                         sync_timeline_with_plex(
                             &state_key,
-                            if p.is_playing() { TimelineState::Playing } else { TimelineState::Paused },
+                            if p.is_playing() {
+                                TimelineState::Playing
+                            } else {
+                                TimelineState::Paused
+                            },
                             p.position(),
                             p.duration(),
                         );

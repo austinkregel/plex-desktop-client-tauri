@@ -1,6 +1,6 @@
+use super::library::{MediaContainer, MetadataItem};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use super::library::{MediaContainer, MetadataItem};
 
 #[derive(Debug, Error)]
 pub enum PlaylistError {
@@ -36,9 +36,17 @@ pub async fn get_playlists(base_url: &str, token: &str) -> Result<Vec<Playlist>,
 }
 
 /// Get items in a playlist.
-pub async fn get_playlist_items(base_url: &str, token: &str, rating_key: &str) -> Result<Vec<MetadataItem>, PlaylistError> {
+pub async fn get_playlist_items(
+    base_url: &str,
+    token: &str,
+    rating_key: &str,
+) -> Result<Vec<MetadataItem>, PlaylistError> {
     let client = super::plex_client(token)?;
-    let url = format!("{}/playlists/{}/items", base_url.trim_end_matches('/'), rating_key);
+    let url = format!(
+        "{}/playlists/{}/items",
+        base_url.trim_end_matches('/'),
+        rating_key
+    );
     let resp: MediaContainer<MetadataItem> = client.get(&url).send().await?.json().await?;
     Ok(resp.media_container.metadata)
 }

@@ -45,13 +45,15 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
         drop(s);
 
         if let Some((token, base_url)) = token_url {
-            let (tx, rx) = async_channel::unbounded::<(Vec<simplex_core::api::library::MetadataItem>, String, String)>();
+            let (tx, rx) = async_channel::unbounded::<(
+                Vec<simplex_core::api::library::MetadataItem>,
+                String,
+                String,
+            )>();
             let bu = base_url.clone();
             let tk = token.clone();
             crate::app::runtime().spawn(async move {
-                if let Ok(items) =
-                    simplex_core::api::search::search(&bu, &tk, &query).await
-                {
+                if let Ok(items) = simplex_core::api::search::search(&bu, &tk, &query).await {
                     let _ = tx.send((items, bu, tk)).await;
                 }
             });
@@ -71,9 +73,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                             crate::window::navigate_to_detail(&state_click, key, "search");
                         });
                         let grid = PosterGrid::new();
-                        grid.add_metadata_items_interactive(
-                            &items, &base_url, &token, on_click,
-                        );
+                        grid.add_metadata_items_interactive(&items, &base_url, &token, on_click);
                         results.append(&grid.widget);
                     }
                 }

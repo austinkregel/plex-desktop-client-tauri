@@ -16,14 +16,14 @@ const DEFAULT_TIMEOUT_SECS: u64 = 10;
 /// Deserialize a reqwest `Response` as JSON, logging the raw body and the
 /// specific serde error when deserialization fails so transient API issues
 /// are diagnosable instead of producing a generic "error decoding response body".
-pub async fn json_response<T: DeserializeOwned>(
-    resp: reqwest::Response,
-) -> Result<T, String> {
+pub async fn json_response<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T, String> {
     let url = resp.url().to_string();
     let status = resp.status();
 
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Err(format!("Unauthorized (401) from {url} — token may be expired"));
+        return Err(format!(
+            "Unauthorized (401) from {url} — token may be expired"
+        ));
     }
 
     if !status.is_success() {
@@ -60,10 +60,16 @@ pub async fn json_response<T: DeserializeOwned>(
 /// Build a reqwest client with standard Plex headers.
 pub fn plex_client(token: &str) -> Result<reqwest::Client, reqwest::Error> {
     let mut headers = HeaderMap::new();
-    headers.insert("X-Plex-Token", HeaderValue::from_str(token).unwrap_or_else(|_| HeaderValue::from_static("")));
+    headers.insert(
+        "X-Plex-Token",
+        HeaderValue::from_str(token).unwrap_or_else(|_| HeaderValue::from_static("")),
+    );
     headers.insert("X-Plex-Product", HeaderValue::from_static("Simplex"));
     headers.insert("X-Plex-Version", HeaderValue::from_static("0.1.0"));
-    headers.insert("X-Plex-Client-Identifier", HeaderValue::from_static("simplex-app"));
+    headers.insert(
+        "X-Plex-Client-Identifier",
+        HeaderValue::from_static("simplex-app"),
+    );
     headers.insert("Accept", HeaderValue::from_static("application/json"));
 
     reqwest::Client::builder()

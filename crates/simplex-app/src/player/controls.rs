@@ -376,14 +376,11 @@ impl PlayerControls {
             let top_hide = top_rev.clone();
             let bot_hide = bot_rev.clone();
             let timer_clear = timer.clone();
-            let id = glib::timeout_add_local_once(
-                std::time::Duration::from_secs(3),
-                move || {
-                    top_hide.set_reveal_child(false);
-                    bot_hide.set_reveal_child(false);
-                    timer_clear.borrow_mut().take();
-                },
-            );
+            let id = glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
+                top_hide.set_reveal_child(false);
+                bot_hide.set_reveal_child(false);
+                timer_clear.borrow_mut().take();
+            });
             *timer.borrow_mut() = Some(id);
         });
         overlay.add_controller(motion_controller);
@@ -466,7 +463,8 @@ impl PlayerControls {
     }
 
     pub fn set_up_next_countdown(&self, secs: u8) {
-        self.up_next_countdown.set_text(&format!("Playing in {}...", secs));
+        self.up_next_countdown
+            .set_text(&format!("Playing in {}...", secs));
     }
 
     pub fn load_up_next_thumb(&self, url: &str) {
@@ -474,8 +472,12 @@ impl PlayerControls {
         let url = url.to_string();
         let (tx, rx) = async_channel::bounded::<glib::Bytes>(1);
         crate::app::runtime().spawn(async move {
-            let Ok(resp) = reqwest::get(&url).await else { return };
-            let Ok(bytes) = resp.bytes().await else { return };
+            let Ok(resp) = reqwest::get(&url).await else {
+                return;
+            };
+            let Ok(bytes) = resp.bytes().await else {
+                return;
+            };
             let _ = tx.send(glib::Bytes::from(&bytes)).await;
         });
         glib::spawn_future_local(async move {

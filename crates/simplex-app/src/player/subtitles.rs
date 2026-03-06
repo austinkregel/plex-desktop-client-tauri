@@ -65,11 +65,7 @@ mod tests {
     fn test_list_tracks_multiple() {
         let mut mock = MockPipeline::new();
         mock.subtitle_count = 3;
-        mock.subtitle_languages = vec![
-            Some("eng".to_string()),
-            Some("spa".to_string()),
-            None,
-        ];
+        mock.subtitle_languages = vec![Some("eng".to_string()), Some("spa".to_string()), None];
         mock.subtitle_titles = vec![
             Some("English".to_string()),
             None,

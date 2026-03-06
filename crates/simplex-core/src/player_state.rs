@@ -42,14 +42,18 @@ impl PlayerNavState {
     pub fn leave_player(&mut self) -> String {
         self.playback_uri = None;
         self.playback_rating_key = None;
-        self.previous_view.clone().unwrap_or_else(|| "detail".into())
+        self.previous_view
+            .clone()
+            .unwrap_or_else(|| "detail".into())
     }
 
     /// Enter PiP mode: the playback URI is kept (pipeline stays alive)
     /// but the UI navigates away from the player view.
     /// Returns the view name to navigate back to.
     pub fn enter_pip_mode(&mut self) -> String {
-        self.previous_view.clone().unwrap_or_else(|| "detail".into())
+        self.previous_view
+            .clone()
+            .unwrap_or_else(|| "detail".into())
     }
 
     /// Whether playback is currently intended (URI is set).

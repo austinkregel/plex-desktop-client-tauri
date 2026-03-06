@@ -1,10 +1,10 @@
 use std::path::Path;
 
 mod app;
-mod window;
-mod views;
 mod player;
+mod views;
 mod widgets;
+mod window;
 
 #[cfg(test)]
 mod test_smoke;
@@ -34,7 +34,9 @@ fn main() {
         eprintln!("Location: {}", location);
         eprintln!("Message: {}", payload);
         // Full backtraces are useful in dev, but too noisy/leaky for release.
-        if cfg!(debug_assertions) || std::env::var("SIMPLEX_DEBUG_PANIC").ok().as_deref() == Some("1") {
+        if cfg!(debug_assertions)
+            || std::env::var("SIMPLEX_DEBUG_PANIC").ok().as_deref() == Some("1")
+        {
             eprintln!("Backtrace:\n{}", std::backtrace::Backtrace::force_capture());
         }
         eprintln!("=== END PANIC ===\n");
@@ -43,8 +45,7 @@ fn main() {
     tracing_subscriber::fmt::init();
 
     gstreamer::init().expect("Failed to initialize GStreamer");
-    gstgtk4::plugin_register_static()
-        .expect("Failed to register gtk4paintablesink plugin");
+    gstgtk4::plugin_register_static().expect("Failed to register gtk4paintablesink plugin");
 
     app::run();
 }

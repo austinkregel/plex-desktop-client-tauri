@@ -63,8 +63,7 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
             async_channel::unbounded::<Vec<simplex_core::api::library::LibrarySection>>();
 
         crate::app::runtime().spawn(async move {
-            if let Ok(sections) =
-                simplex_core::api::library::get_sections(&base_url, &token).await
+            if let Ok(sections) = simplex_core::api::library::get_sections(&base_url, &token).await
             {
                 let _ = tx.send_blocking(sections);
             }
@@ -136,9 +135,7 @@ fn load_collections(state: &Arc<Mutex<AppState>>, grid_area: &GtkBox, section_ke
         let bu = base_url.clone();
         let tk = token.clone();
         crate::app::runtime().spawn(async move {
-            if let Ok(items) =
-                simplex_core::api::library::get_collections(&bu, &tk, &key).await
-            {
+            if let Ok(items) = simplex_core::api::library::get_collections(&bu, &tk, &key).await {
                 let _ = tx.send((items, bu, tk)).await;
             }
         });
@@ -160,9 +157,7 @@ fn load_collections(state: &Arc<Mutex<AppState>>, grid_area: &GtkBox, section_ke
                         crate::window::navigate_to_detail(&state_click, key, "collections");
                     });
                     let poster_grid = PosterGrid::new();
-                    poster_grid.add_metadata_items_interactive(
-                        &items, &base_url, &token, on_click,
-                    );
+                    poster_grid.add_metadata_items_interactive(&items, &base_url, &token, on_click);
                     grid.append(&poster_grid.widget);
                 }
             }

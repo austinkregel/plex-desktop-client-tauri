@@ -323,7 +323,11 @@ mod tests {
     #[test]
     fn test_poster_aspect_ratio_is_2_3() {
         let ratio = POSTER_HEIGHT as f64 / CARD_WIDTH as f64;
-        assert!((ratio - 1.5).abs() < 0.01, "Expected 2:3 ratio (1.5), got {}", ratio);
+        assert!(
+            (ratio - 1.5).abs() < 0.01,
+            "Expected 2:3 ratio (1.5), got {}",
+            ratio
+        );
     }
 
     #[test]

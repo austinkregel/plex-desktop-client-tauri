@@ -5,9 +5,9 @@
 //! Supports configurable mismatch actions: Pause, WarnDialog, or Ignore.
 
 use gstreamer::prelude::*;
-use std::sync::{Arc, Mutex};
 use simplex_core::config::MismatchAction;
 use simplex_core::media::{AudioTrack, MediaSession, TrackEvent, TrackPreference};
+use std::sync::{Arc, Mutex};
 
 use super::pipeline::PlayerPipeline;
 
@@ -22,7 +22,9 @@ pub struct MismatchWarning {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum TrackAction {
     None,
-    Pause { reason: String },
+    Pause {
+        reason: String,
+    },
     WarnAndPause {
         reason: String,
         language: String,
@@ -31,10 +33,7 @@ pub(crate) enum TrackAction {
 }
 
 /// Pure logic: evaluate a track change and decide what action to take.
-pub(crate) fn evaluate_track_action(
-    session: &mut MediaSession,
-    track: &AudioTrack,
-) -> TrackAction {
+pub(crate) fn evaluate_track_action(session: &mut MediaSession, track: &AudioTrack) -> TrackAction {
     session.current_audio_track = Some(track.clone());
 
     let Some(event) = session.evaluate_audio_track_change(track) else {
@@ -124,11 +123,18 @@ impl TrackMonitor {
                     tracing::warn!("{}", reason);
                     pipe_guard.pause();
                 }
-                TrackAction::WarnAndPause { reason, language, preferred } => {
+                TrackAction::WarnAndPause {
+                    reason,
+                    language,
+                    preferred,
+                } => {
                     tracing::warn!("{}", reason);
                     pipe_guard.pause();
                     if let Some(ref tx) = warning_tx {
-                        let _ = tx.try_send(MismatchWarning { language, preferred });
+                        let _ = tx.try_send(MismatchWarning {
+                            language,
+                            preferred,
+                        });
                     }
                 }
             }
@@ -188,7 +194,10 @@ mod tests {
             codec: None,
             channels: None,
         };
-        assert_eq!(evaluate_track_action(&mut session, &track), TrackAction::None);
+        assert_eq!(
+            evaluate_track_action(&mut session, &track),
+            TrackAction::None
+        );
     }
 
     #[test]
@@ -208,7 +217,11 @@ mod tests {
         let mut session = make_session(pref);
         let track = make_track(Some("spa"));
         match evaluate_track_action(&mut session, &track) {
-            TrackAction::WarnAndPause { language, preferred, reason } => {
+            TrackAction::WarnAndPause {
+                language,
+                preferred,
+                reason,
+            } => {
                 assert_eq!(language, "spa");
                 assert_eq!(preferred, "eng");
                 assert!(!reason.is_empty());
@@ -222,7 +235,10 @@ mod tests {
         let pref = make_preference(MismatchAction::Ignore, vec!["eng"]);
         let mut session = make_session(pref);
         let track = make_track(Some("spa"));
-        assert_eq!(evaluate_track_action(&mut session, &track), TrackAction::None);
+        assert_eq!(
+            evaluate_track_action(&mut session, &track),
+            TrackAction::None
+        );
     }
 
     #[test]
@@ -251,7 +267,11 @@ mod tests {
         // Change to a track with a different language (not None, which returns TrackAction::None)
         let track = make_track(Some("jpn"));
         match evaluate_track_action(&mut session, &track) {
-            TrackAction::WarnAndPause { language, preferred, .. } => {
+            TrackAction::WarnAndPause {
+                language,
+                preferred,
+                ..
+            } => {
                 assert_eq!(language, "jpn");
                 assert_eq!(preferred, "eng");
             }

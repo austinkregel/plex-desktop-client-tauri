@@ -1,39 +1,55 @@
 //! Application-wide settings page using adw::PreferencesPage.
 
 use gtk4::prelude::*;
-use gtk4::{
-    Box as GtkBox, Entry, Orientation, StringList, Switch,
-};
+use gtk4::{Box as GtkBox, Entry, Orientation, StringList, Switch};
 use libadwaita::prelude::*;
-use libadwaita::{
-    ActionRow, ComboRow, PreferencesGroup, PreferencesPage,
-};
+use libadwaita::{ActionRow, ComboRow, PreferencesGroup, PreferencesPage};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use simplex_core::config::{
-    self, MismatchAction, StreamQuality, SubtitleAutoEnable, UserSettings,
-};
-use crate::window::AppState;
+use crate::window::{AppState, SettingsEvent};
+use simplex_core::config::{self, MismatchAction, StreamQuality, SubtitleAutoEnable, UserSettings};
 
-pub fn build(_state: Arc<Mutex<AppState>>) -> GtkBox {
+pub struct SettingsView {
+    pub widget: GtkBox,
+    pub(crate) audio_language_entry: Entry,
+    pub(crate) mismatch_action_row: ComboRow,
+    pub(crate) subtitle_language_entry: Entry,
+    pub(crate) subtitle_auto_enable_row: ComboRow,
+}
+
+pub fn build(state: Arc<Mutex<AppState>>) -> SettingsView {
     let container = GtkBox::new(Orientation::Vertical, 0);
     container.set_vexpand(true);
     container.set_hexpand(true);
 
     let settings = Rc::new(RefCell::new(config::load_user_settings()));
+    let event_tx = state.lock().unwrap().settings_event_tx.clone();
 
     let page = PreferencesPage::new();
     page.set_title("Settings");
 
     page.add(&build_playback_group(&settings));
-    page.add(&build_audio_group(&settings));
-    page.add(&build_subtitle_group(&settings));
+
+    let (audio_group, audio_language_entry, mismatch_action_row) =
+        build_audio_group(&settings, &event_tx);
+    page.add(&audio_group);
+
+    let (subtitle_group, subtitle_language_entry, subtitle_auto_enable_row) =
+        build_subtitle_group(&settings);
+    page.add(&subtitle_group);
+
     page.add(&build_server_group());
 
     container.append(&page);
-    container
+    SettingsView {
+        widget: container,
+        audio_language_entry,
+        mismatch_action_row,
+        subtitle_language_entry,
+        subtitle_auto_enable_row,
+    }
 }
 
 // ── Playback ──────────────────────────────────────────────────────────────
@@ -57,13 +73,11 @@ fn build_playback_group(settings: &Rc<RefCell<UserSettings>>) -> PreferencesGrou
         let current = &settings.borrow().playback.quality;
         let active = match current {
             StreamQuality::Original => 0u32,
-            StreamQuality::Maximum(kbps) => {
-                StreamQuality::PRESETS
-                    .iter()
-                    .position(|(k, _)| k == kbps)
-                    .map(|i| (i + 1) as u32)
-                    .unwrap_or(0)
-            }
+            StreamQuality::Maximum(kbps) => StreamQuality::PRESETS
+                .iter()
+                .position(|(k, _)| k == kbps)
+                .map(|i| (i + 1) as u32)
+                .unwrap_or(0),
         };
         row.set_selected(active);
 
@@ -115,7 +129,8 @@ fn build_playback_group(settings: &Rc<RefCell<UserSettings>>) -> PreferencesGrou
         let s = settings.clone();
         entry.connect_changed(move |e| {
             let text = e.text().to_string();
-            s.borrow_mut().playback.preferred_codec = if text.is_empty() { None } else { Some(text) };
+            s.borrow_mut().playback.preferred_codec =
+                if text.is_empty() { None } else { Some(text) };
             save(&s.borrow());
         });
         row.add_suffix(&entry);
@@ -169,81 +184,90 @@ fn build_playback_group(settings: &Rc<RefCell<UserSettings>>) -> PreferencesGrou
 
 // ── Audio ─────────────────────────────────────────────────────────────────
 
-fn build_audio_group(settings: &Rc<RefCell<UserSettings>>) -> PreferencesGroup {
+fn build_audio_group(
+    settings: &Rc<RefCell<UserSettings>>,
+    event_tx: &async_channel::Sender<SettingsEvent>,
+) -> (PreferencesGroup, Entry, ComboRow) {
     let group = PreferencesGroup::new();
     group.set_title("Audio");
 
     // Preferred languages
+    let lang_entry = Entry::new();
     {
         let row = ActionRow::new();
         row.set_title("Preferred Languages");
         row.set_subtitle("Comma-separated ISO 639 codes (e.g. eng, jpn)");
-        let entry = Entry::new();
-        entry.set_valign(gtk4::Align::Center);
-        entry.set_width_chars(14);
-        entry.set_text(&settings.borrow().audio.preferred_languages.join(", "));
+        lang_entry.set_valign(gtk4::Align::Center);
+        lang_entry.set_width_chars(14);
+        lang_entry.set_text(&settings.borrow().audio.preferred_languages.join(", "));
         let s = settings.clone();
-        entry.connect_changed(move |e| {
+        let tx = event_tx.clone();
+        lang_entry.connect_changed(move |e| {
             let text = e.text().to_string();
             let langs: Vec<String> = text
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-            s.borrow_mut().audio.preferred_languages = langs;
+            s.borrow_mut().audio.preferred_languages = langs.clone();
             save(&s.borrow());
+            let _ = tx.try_send(SettingsEvent::AudioLanguagesChanged(langs));
         });
-        row.add_suffix(&entry);
+        row.add_suffix(&lang_entry);
         group.add(&row);
     }
 
     // Language mismatch action
+    let mismatch_row = ComboRow::new();
     {
-        let row = ComboRow::new();
-        row.set_title("On Language Mismatch");
-        row.set_subtitle("Action when preferred audio language is unavailable");
+        mismatch_row.set_title("On Language Mismatch");
+        mismatch_row.set_subtitle("Action when preferred audio language is unavailable");
         let labels = StringList::new(&["Show Warning Dialog", "Pause Playback", "Ignore"]);
-        row.set_model(Some(&labels));
+        mismatch_row.set_model(Some(&labels));
         let active = match settings.borrow().audio.language_mismatch_action {
             MismatchAction::WarnDialog => 0u32,
             MismatchAction::Pause => 1,
             MismatchAction::Ignore => 2,
         };
-        row.set_selected(active);
+        mismatch_row.set_selected(active);
 
         let s = settings.clone();
-        row.connect_selected_notify(move |r| {
+        let tx = event_tx.clone();
+        mismatch_row.connect_selected_notify(move |r| {
             let action = match r.selected() {
                 0 => MismatchAction::WarnDialog,
                 1 => MismatchAction::Pause,
                 _ => MismatchAction::Ignore,
             };
-            s.borrow_mut().audio.language_mismatch_action = action;
+            s.borrow_mut().audio.language_mismatch_action = action.clone();
             save(&s.borrow());
+            let _ = tx.try_send(SettingsEvent::AudioMismatchActionChanged(action));
         });
-        group.add(&row);
+        group.add(&mismatch_row);
     }
 
-    group
+    (group, lang_entry, mismatch_row)
 }
 
 // ── Subtitles ─────────────────────────────────────────────────────────────
 
-fn build_subtitle_group(settings: &Rc<RefCell<UserSettings>>) -> PreferencesGroup {
+fn build_subtitle_group(
+    settings: &Rc<RefCell<UserSettings>>,
+) -> (PreferencesGroup, Entry, ComboRow) {
     let group = PreferencesGroup::new();
     group.set_title("Subtitles");
 
     // Preferred languages
+    let lang_entry = Entry::new();
     {
         let row = ActionRow::new();
         row.set_title("Preferred Languages");
         row.set_subtitle("Comma-separated ISO 639 codes");
-        let entry = Entry::new();
-        entry.set_valign(gtk4::Align::Center);
-        entry.set_width_chars(14);
-        entry.set_text(&settings.borrow().subtitles.preferred_languages.join(", "));
+        lang_entry.set_valign(gtk4::Align::Center);
+        lang_entry.set_width_chars(14);
+        lang_entry.set_text(&settings.borrow().subtitles.preferred_languages.join(", "));
         let s = settings.clone();
-        entry.connect_changed(move |e| {
+        lang_entry.connect_changed(move |e| {
             let text = e.text().to_string();
             let langs: Vec<String> = text
                 .split(',')
@@ -253,25 +277,25 @@ fn build_subtitle_group(settings: &Rc<RefCell<UserSettings>>) -> PreferencesGrou
             s.borrow_mut().subtitles.preferred_languages = langs;
             save(&s.borrow());
         });
-        row.add_suffix(&entry);
+        row.add_suffix(&lang_entry);
         group.add(&row);
     }
 
     // Auto-enable subtitles
+    let auto_enable_row = ComboRow::new();
     {
-        let row = ComboRow::new();
-        row.set_title("Auto-Enable Subtitles");
+        auto_enable_row.set_title("Auto-Enable Subtitles");
         let labels = StringList::new(&["Always", "On Language Mismatch", "Never"]);
-        row.set_model(Some(&labels));
+        auto_enable_row.set_model(Some(&labels));
         let active = match settings.borrow().subtitles.auto_enable {
             SubtitleAutoEnable::Always => 0u32,
             SubtitleAutoEnable::OnMismatch => 1,
             SubtitleAutoEnable::Never => 2,
         };
-        row.set_selected(active);
+        auto_enable_row.set_selected(active);
 
         let s = settings.clone();
-        row.connect_selected_notify(move |r| {
+        auto_enable_row.connect_selected_notify(move |r| {
             let mode = match r.selected() {
                 0 => SubtitleAutoEnable::Always,
                 1 => SubtitleAutoEnable::OnMismatch,
@@ -280,7 +304,7 @@ fn build_subtitle_group(settings: &Rc<RefCell<UserSettings>>) -> PreferencesGrou
             s.borrow_mut().subtitles.auto_enable = mode;
             save(&s.borrow());
         });
-        group.add(&row);
+        group.add(&auto_enable_row);
     }
 
     // Prefer forced subtitles
@@ -302,7 +326,7 @@ fn build_subtitle_group(settings: &Rc<RefCell<UserSettings>>) -> PreferencesGrou
         group.add(&row);
     }
 
-    group
+    (group, lang_entry, auto_enable_row)
 }
 
 // ── Server ────────────────────────────────────────────────────────────────

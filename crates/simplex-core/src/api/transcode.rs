@@ -1,10 +1,5 @@
 /// Build a transcode (HLS) playback URL for a media item.
-pub fn transcode_url(
-    base_url: &str,
-    token: &str,
-    path: &str,
-    session_id: &str,
-) -> String {
+pub fn transcode_url(base_url: &str, token: &str, path: &str, session_id: &str) -> String {
     let base = base_url.trim_end_matches('/');
     format!(
         "{}/video/:/transcode/universal/start.m3u8?path={}&mediaIndex=0&partIndex=0\
@@ -63,7 +58,12 @@ mod tests {
 
     #[test]
     fn test_transcode_url() {
-        let url = transcode_url("http://localhost:32400", "mytoken", "/library/metadata/123", "sess1");
+        let url = transcode_url(
+            "http://localhost:32400",
+            "mytoken",
+            "/library/metadata/123",
+            "sess1",
+        );
         assert!(url.contains("start.m3u8"));
         assert!(url.contains("path=%2Flibrary%2Fmetadata%2F123"));
         assert!(url.contains("X-Plex-Token=mytoken"));
@@ -72,17 +72,27 @@ mod tests {
 
     #[test]
     fn test_direct_stream_url() {
-        let url = direct_stream_url("http://localhost:32400", "tok", "/library/parts/42/file.mkv");
-        assert_eq!(url, "http://localhost:32400/library/parts/42/file.mkv?X-Plex-Token=tok");
+        let url = direct_stream_url(
+            "http://localhost:32400",
+            "tok",
+            "/library/parts/42/file.mkv",
+        );
+        assert_eq!(
+            url,
+            "http://localhost:32400/library/parts/42/file.mkv?X-Plex-Token=tok"
+        );
     }
 
     #[test]
     fn test_direct_play_url() {
         let url = direct_play_url("http://localhost:32400", "tok", 42);
-        assert_eq!(url, "http://localhost:32400/library/parts/42/file?X-Plex-Token=tok");
+        assert_eq!(
+            url,
+            "http://localhost:32400/library/parts/42/file?X-Plex-Token=tok"
+        );
     }
 
-    use super::super::library::{MetadataItem, MediaInfo, MediaPart};
+    use super::super::library::{MediaInfo, MediaPart, MetadataItem};
 
     fn make_item_with_media(part_key: Option<&str>) -> MetadataItem {
         MetadataItem {

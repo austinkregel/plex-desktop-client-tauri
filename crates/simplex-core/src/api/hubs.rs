@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use super::library::MetadataItem;
 use crate::cache::{self, CachePolicy};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 const HUBS_TTL: CachePolicy = CachePolicy { ttl_secs: 60 };
 
@@ -54,9 +54,13 @@ pub async fn get_hubs(base_url: &str, token: &str) -> Result<Vec<Hub>, HubError>
 }
 
 /// Get continue watching hub specifically.
-pub async fn get_continue_watching(base_url: &str, token: &str) -> Result<Vec<MetadataItem>, HubError> {
+pub async fn get_continue_watching(
+    base_url: &str,
+    token: &str,
+) -> Result<Vec<MetadataItem>, HubError> {
     let hubs = get_hubs(base_url, token).await?;
-    let items = hubs.into_iter()
+    let items = hubs
+        .into_iter()
         .filter(|h| {
             h.hub_identifier.as_deref() == Some("home.continue")
                 || h.hub_identifier.as_deref() == Some("hub.tv.inprogress")
@@ -70,7 +74,8 @@ pub async fn get_continue_watching(base_url: &str, token: &str) -> Result<Vec<Me
 /// Get on deck items.
 pub async fn get_on_deck(base_url: &str, token: &str) -> Result<Vec<MetadataItem>, HubError> {
     let hubs = get_hubs(base_url, token).await?;
-    let items = hubs.into_iter()
+    let items = hubs
+        .into_iter()
         .filter(|h| {
             h.hub_identifier.as_deref() == Some("hub.tv.ondeck")
                 || h.title.to_lowercase().contains("on deck")
@@ -87,7 +92,8 @@ pub fn deduplicate_hubs(hubs: Vec<Hub>) -> Vec<Hub> {
     let mut seen = std::collections::HashSet::new();
     hubs.into_iter()
         .map(|mut hub| {
-            hub.metadata.retain(|item| seen.insert(item.rating_key.clone()));
+            hub.metadata
+                .retain(|item| seen.insert(item.rating_key.clone()));
             hub
         })
         .filter(|hub| !hub.metadata.is_empty())
@@ -104,42 +110,45 @@ mod tests {
             hub_type: None,
             hub_identifier: identifier.map(String::from),
             size: Some(items.len() as u32),
-            metadata: items.into_iter().map(|t| MetadataItem {
-                rating_key: "1".to_string(),
-                key: "/library/metadata/1".to_string(),
-                guid: None,
-                external_guids: vec![],
-                title: t.to_string(),
-                media_type: None,
-                summary: None,
-                year: None,
-                originally_available_at: None,
-                thumb: None,
-                art: None,
-                parent_thumb: None,
-                grandparent_thumb: None,
-                duration: None,
-                added_at: None,
-                updated_at: None,
-                view_count: None,
-                rating: None,
-                audience_rating: None,
-                user_rating: None,
-                album_type: None,
-                parent_year: None,
-                last_viewed_at: None,
-                view_offset: None,
-                parent_rating_key: None,
-                grandparent_rating_key: None,
-                parent_title: None,
-                grandparent_title: None,
-                parent_index: None,
-                index: None,
-                leaf_count: None,
-                viewed_leaf_count: None,
-                media: None,
-                markers: vec![],
-            }).collect(),
+            metadata: items
+                .into_iter()
+                .map(|t| MetadataItem {
+                    rating_key: "1".to_string(),
+                    key: "/library/metadata/1".to_string(),
+                    guid: None,
+                    external_guids: vec![],
+                    title: t.to_string(),
+                    media_type: None,
+                    summary: None,
+                    year: None,
+                    originally_available_at: None,
+                    thumb: None,
+                    art: None,
+                    parent_thumb: None,
+                    grandparent_thumb: None,
+                    duration: None,
+                    added_at: None,
+                    updated_at: None,
+                    view_count: None,
+                    rating: None,
+                    audience_rating: None,
+                    user_rating: None,
+                    album_type: None,
+                    parent_year: None,
+                    last_viewed_at: None,
+                    view_offset: None,
+                    parent_rating_key: None,
+                    grandparent_rating_key: None,
+                    parent_title: None,
+                    grandparent_title: None,
+                    parent_index: None,
+                    index: None,
+                    leaf_count: None,
+                    viewed_leaf_count: None,
+                    media: None,
+                    markers: vec![],
+                })
+                .collect(),
         }
     }
 
@@ -175,7 +184,8 @@ mod tests {
             make_hub("In Progress", Some("hub.tv.inprogress"), vec!["Item C"]),
         ];
 
-        let cw: Vec<_> = hubs.into_iter()
+        let cw: Vec<_> = hubs
+            .into_iter()
             .filter(|h| {
                 h.hub_identifier.as_deref() == Some("home.continue")
                     || h.hub_identifier.as_deref() == Some("hub.tv.inprogress")
@@ -196,7 +206,8 @@ mod tests {
             make_hub("Continue Watching", Some("home.continue"), vec!["Movie A"]),
         ];
 
-        let od: Vec<_> = hubs.into_iter()
+        let od: Vec<_> = hubs
+            .into_iter()
             .filter(|h| {
                 h.hub_identifier.as_deref() == Some("hub.tv.ondeck")
                     || h.title.to_lowercase().contains("on deck")
@@ -216,42 +227,45 @@ mod tests {
             hub_type: None,
             hub_identifier: None,
             size: Some(items.len() as u32),
-            metadata: items.into_iter().map(|(key, name)| MetadataItem {
-                rating_key: key.to_string(),
-                key: format!("/library/metadata/{}", key),
-                guid: None,
-                external_guids: vec![],
-                title: name.to_string(),
-                media_type: None,
-                summary: None,
-                year: None,
-                originally_available_at: None,
-                thumb: None,
-                art: None,
-                parent_thumb: None,
-                grandparent_thumb: None,
-                duration: None,
-                added_at: None,
-                updated_at: None,
-                view_count: None,
-                rating: None,
-                audience_rating: None,
-                user_rating: None,
-                album_type: None,
-                parent_year: None,
-                last_viewed_at: None,
-                view_offset: None,
-                parent_rating_key: None,
-                grandparent_rating_key: None,
-                parent_title: None,
-                grandparent_title: None,
-                parent_index: None,
-                index: None,
-                leaf_count: None,
-                viewed_leaf_count: None,
-                media: None,
-                markers: vec![],
-            }).collect(),
+            metadata: items
+                .into_iter()
+                .map(|(key, name)| MetadataItem {
+                    rating_key: key.to_string(),
+                    key: format!("/library/metadata/{}", key),
+                    guid: None,
+                    external_guids: vec![],
+                    title: name.to_string(),
+                    media_type: None,
+                    summary: None,
+                    year: None,
+                    originally_available_at: None,
+                    thumb: None,
+                    art: None,
+                    parent_thumb: None,
+                    grandparent_thumb: None,
+                    duration: None,
+                    added_at: None,
+                    updated_at: None,
+                    view_count: None,
+                    rating: None,
+                    audience_rating: None,
+                    user_rating: None,
+                    album_type: None,
+                    parent_year: None,
+                    last_viewed_at: None,
+                    view_offset: None,
+                    parent_rating_key: None,
+                    grandparent_rating_key: None,
+                    parent_title: None,
+                    grandparent_title: None,
+                    parent_index: None,
+                    index: None,
+                    leaf_count: None,
+                    viewed_leaf_count: None,
+                    media: None,
+                    markers: vec![],
+                })
+                .collect(),
         }
     }
 
@@ -313,9 +327,7 @@ mod tests {
 
     #[test]
     fn test_deduplicate_single_hub() {
-        let hubs = vec![
-            make_hub_with_keys("Hub 1", vec![("1", "A"), ("2", "B")]),
-        ];
+        let hubs = vec![make_hub_with_keys("Hub 1", vec![("1", "A"), ("2", "B")])];
         let result = deduplicate_hubs(hubs);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].metadata.len(), 2);

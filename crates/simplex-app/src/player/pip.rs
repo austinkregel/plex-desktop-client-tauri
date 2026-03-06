@@ -97,8 +97,7 @@ impl PipWindow {
         return_btn.set_margin_top(6);
         return_btn.set_margin_start(6);
 
-        let on_return: Arc<Mutex<Option<Box<dyn Fn() + 'static>>>> =
-            Arc::new(Mutex::new(None));
+        let on_return: Arc<Mutex<Option<Box<dyn Fn() + 'static>>>> = Arc::new(Mutex::new(None));
 
         let suppress_close_for_return = Rc::new(Cell::new(false));
         let win_return = window.clone();
@@ -138,8 +137,7 @@ impl PipWindow {
         handle.set_child(Some(&overlay));
         window.set_child(Some(&handle));
 
-        let on_close: Arc<Mutex<Option<Box<dyn Fn() + 'static>>>> =
-            Arc::new(Mutex::new(None));
+        let on_close: Arc<Mutex<Option<Box<dyn Fn() + 'static>>>> = Arc::new(Mutex::new(None));
 
         let cb = on_close.clone();
         let suppress_close = suppress_close_for_return.clone();

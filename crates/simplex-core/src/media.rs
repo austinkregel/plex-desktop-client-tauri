@@ -173,7 +173,10 @@ mod tests {
         let mut session = MediaSession::new();
         session.available_audio_tracks = available_audio_tracks;
         session.track_preference = TrackPreference {
-            preferred_languages: preferred_languages.iter().map(|s| (*s).to_string()).collect(),
+            preferred_languages: preferred_languages
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             pause_on_mismatch,
             mismatch_action: if pause_on_mismatch {
                 MismatchAction::Pause
@@ -300,15 +303,13 @@ mod tests {
     fn test_evaluate_audio_track_change_pause_on_mismatch_false() {
         // pause_on_mismatch is false -> always returns None
         let session = make_session(
-            vec![
-                AudioTrack {
-                    index: 0,
-                    language: Some("spa".to_string()),
-                    title: None,
-                    codec: None,
-                    channels: None,
-                },
-            ],
+            vec![AudioTrack {
+                index: 0,
+                language: Some("spa".to_string()),
+                title: None,
+                codec: None,
+                channels: None,
+            }],
             vec!["eng", "en"],
             false,
         );
@@ -413,11 +414,8 @@ mod tests {
     #[test]
     fn test_from_user_settings_inherits_languages() {
         let mut settings = UserSettings::default();
-        settings.audio.preferred_languages = vec![
-            "fra".to_string(),
-            "deu".to_string(),
-            "eng".to_string(),
-        ];
+        settings.audio.preferred_languages =
+            vec!["fra".to_string(), "deu".to_string(), "eng".to_string()];
 
         let pref = TrackPreference::from_user_settings(&settings);
         assert_eq!(pref.preferred_languages, vec!["fra", "deu", "eng"]);

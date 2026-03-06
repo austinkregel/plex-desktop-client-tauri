@@ -69,12 +69,8 @@ fn smoke_test_all_views_and_widgets() {
     let _mini_player = crate::widgets::mini_player::build(state.clone());
 
     let state = test_state();
-    let _entity_link = crate::widgets::entity_link::make_entity_link(
-        "Test",
-        "123",
-        "library",
-        state.clone(),
-    );
+    let _entity_link =
+        crate::widgets::entity_link::make_entity_link("Test", "123", "library", state.clone());
 
     // PosterGrid
     let _grid = crate::widgets::poster_grid::PosterGrid::new();

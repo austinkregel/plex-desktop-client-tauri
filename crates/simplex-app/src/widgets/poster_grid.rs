@@ -35,7 +35,10 @@ impl PosterGrid {
         flow_box.set_column_spacing(8);
         flow_box.set_row_spacing(8);
 
-        Self { widget: flow_box, style }
+        Self {
+            widget: flow_box,
+            style,
+        }
     }
 
     /// Add a single card (no click handling).

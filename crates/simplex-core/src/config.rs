@@ -63,13 +63,11 @@ impl StreamQuality {
     pub fn label(&self) -> String {
         match self {
             Self::Original => "Original".to_string(),
-            Self::Maximum(kbps) => {
-                Self::PRESETS
-                    .iter()
-                    .find(|(k, _)| k == kbps)
-                    .map(|(_, l)| l.to_string())
-                    .unwrap_or_else(|| format!("{} kbps", kbps))
-            }
+            Self::Maximum(kbps) => Self::PRESETS
+                .iter()
+                .find(|(k, _)| k == kbps)
+                .map(|(_, l)| l.to_string())
+                .unwrap_or_else(|| format!("{} kbps", kbps)),
         }
     }
 }
@@ -118,9 +116,15 @@ pub struct PlaybackSettings {
     pub playback_speed: f64,
 }
 
-fn default_true() -> bool { true }
-fn default_volume() -> f64 { 1.0 }
-fn default_speed() -> f64 { 1.0 }
+fn default_true() -> bool {
+    true
+}
+fn default_volume() -> f64 {
+    1.0
+}
+fn default_speed() -> f64 {
+    1.0
+}
 
 impl Default for PlaybackSettings {
     fn default() -> Self {
@@ -347,7 +351,10 @@ pub fn validate_deep_link_base_url_against_origins(
 ) -> Result<(), ConfigError> {
     let normalized_origin = normalize_url_to_origin(base_url)?;
 
-    if allowed_origins.iter().any(|origin| origin == &normalized_origin) {
+    if allowed_origins
+        .iter()
+        .any(|origin| origin == &normalized_origin)
+    {
         Ok(())
     } else {
         Err(ConfigError::Validation(format!(
@@ -702,11 +709,9 @@ mod tests {
         )
         .is_err());
 
-        assert!(validate_deep_link_base_url_against_origins(
-            "not-a-url",
-            &allowed_origins
-        )
-        .is_err());
+        assert!(
+            validate_deep_link_base_url_against_origins("not-a-url", &allowed_origins).is_err()
+        );
 
         assert!(validate_deep_link_base_url_against_origins(
             "ftp://localhost:32400",
@@ -771,8 +776,14 @@ mod tests {
         assert_eq!(deserialized.servers[0].name, "My Server");
         assert_eq!(deserialized.default_server_id, Some("server-1".to_string()));
         assert!(deserialized.auth_token.is_none());
-        assert_eq!(deserialized.pinned_library_keys, vec!["2".to_string(), "4".to_string()]);
-        assert_eq!(deserialized.user_settings.playback.quality, StreamQuality::Original);
+        assert_eq!(
+            deserialized.pinned_library_keys,
+            vec!["2".to_string(), "4".to_string()]
+        );
+        assert_eq!(
+            deserialized.user_settings.playback.quality,
+            StreamQuality::Original
+        );
     }
 
     #[test]
@@ -822,7 +833,11 @@ mod tests {
     fn test_check_rate_limit() {
         let key = format!("test-source-{:?}", std::thread::current().id());
         for i in 0..10 {
-            assert!(check_rate_limit(&key).is_ok(), "Request {} should succeed", i);
+            assert!(
+                check_rate_limit(&key).is_ok(),
+                "Request {} should succeed",
+                i
+            );
         }
         let result = check_rate_limit(&key);
         assert!(result.is_err());
@@ -866,12 +881,21 @@ mod tests {
 
         assert_eq!(deserialized.playback.quality, StreamQuality::Maximum(8_000));
         assert!(deserialized.playback.auto_adjust_quality);
-        assert_eq!(deserialized.playback.preferred_codec.as_deref(), Some("hevc"));
+        assert_eq!(
+            deserialized.playback.preferred_codec.as_deref(),
+            Some("hevc")
+        );
         assert!((deserialized.playback.playback_speed - 1.5).abs() < f64::EPSILON);
         assert_eq!(deserialized.audio.preferred_languages, vec!["jpn", "eng"]);
-        assert_eq!(deserialized.audio.language_mismatch_action, MismatchAction::Pause);
+        assert_eq!(
+            deserialized.audio.language_mismatch_action,
+            MismatchAction::Pause
+        );
         assert_eq!(deserialized.subtitles.preferred_languages, vec!["eng"]);
-        assert_eq!(deserialized.subtitles.auto_enable, SubtitleAutoEnable::Always);
+        assert_eq!(
+            deserialized.subtitles.auto_enable,
+            SubtitleAutoEnable::Always
+        );
         assert!(deserialized.subtitles.prefer_forced);
     }
 
@@ -892,8 +916,14 @@ mod tests {
             "client_id": "test"
         }"#;
         let config: AppConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.user_settings.playback.quality, StreamQuality::Original);
-        assert_eq!(config.user_settings.audio.preferred_languages, vec!["eng", "en"]);
+        assert_eq!(
+            config.user_settings.playback.quality,
+            StreamQuality::Original
+        );
+        assert_eq!(
+            config.user_settings.audio.preferred_languages,
+            vec!["eng", "en"]
+        );
     }
 
     #[test]
@@ -905,7 +935,10 @@ mod tests {
         }"#;
         let config: AppConfig = serde_json::from_str(json).unwrap();
         assert!(config.device_settings.is_some());
-        assert_eq!(config.user_settings.playback.quality, StreamQuality::Original);
+        assert_eq!(
+            config.user_settings.playback.quality,
+            StreamQuality::Original
+        );
     }
 
     #[test]
@@ -968,7 +1001,11 @@ mod tests {
 
     #[test]
     fn test_mismatch_action_serde_roundtrip() {
-        for action in [MismatchAction::Pause, MismatchAction::WarnDialog, MismatchAction::Ignore] {
+        for action in [
+            MismatchAction::Pause,
+            MismatchAction::WarnDialog,
+            MismatchAction::Ignore,
+        ] {
             let json = serde_json::to_string(&action).unwrap();
             let back: MismatchAction = serde_json::from_str(&json).unwrap();
             assert_eq!(back, action);
@@ -977,12 +1014,19 @@ mod tests {
 
     #[test]
     fn test_subtitle_auto_enable_default() {
-        assert_eq!(SubtitleAutoEnable::default(), SubtitleAutoEnable::OnMismatch);
+        assert_eq!(
+            SubtitleAutoEnable::default(),
+            SubtitleAutoEnable::OnMismatch
+        );
     }
 
     #[test]
     fn test_subtitle_auto_enable_serde_roundtrip() {
-        for variant in [SubtitleAutoEnable::Always, SubtitleAutoEnable::OnMismatch, SubtitleAutoEnable::Never] {
+        for variant in [
+            SubtitleAutoEnable::Always,
+            SubtitleAutoEnable::OnMismatch,
+            SubtitleAutoEnable::Never,
+        ] {
             let json = serde_json::to_string(&variant).unwrap();
             let back: SubtitleAutoEnable = serde_json::from_str(&json).unwrap();
             assert_eq!(back, variant);

@@ -80,7 +80,11 @@ pub async fn scrobble(base_url: &str, token: &str, rating_key: &str) -> Result<(
 }
 
 /// Mark an item as unwatched.
-pub async fn unscrobble(base_url: &str, token: &str, rating_key: &str) -> Result<(), PlaybackError> {
+pub async fn unscrobble(
+    base_url: &str,
+    token: &str,
+    rating_key: &str,
+) -> Result<(), PlaybackError> {
     let client = super::plex_client(token)?;
     let url = format!("{}/:/unscrobble", base_url.trim_end_matches('/'));
     let query = vec![
@@ -134,7 +138,11 @@ mod tests {
 
     #[test]
     fn test_all_timeline_states_covered() {
-        let states = [TimelineState::Playing, TimelineState::Paused, TimelineState::Stopped];
+        let states = [
+            TimelineState::Playing,
+            TimelineState::Paused,
+            TimelineState::Stopped,
+        ];
         let expected = ["playing", "paused", "stopped"];
         for (state, exp) in states.iter().zip(expected.iter()) {
             assert_eq!(state.as_str(), *exp);

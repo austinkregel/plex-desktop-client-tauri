@@ -1,6 +1,11 @@
 //! Pure business logic extracted from the player view for testability.
 
 use simplex_core::api::library::Marker;
+use simplex_core::config::MismatchAction;
+use simplex_core::media::MediaSession;
+
+use super::pipeline::PipelineApi;
+use crate::window::SettingsEvent;
 
 /// Convert seconds to milliseconds, clamping negatives to zero.
 pub(crate) fn secs_to_ms(value: f64) -> u64 {
@@ -22,8 +27,16 @@ pub(crate) fn active_marker(markers: &[Marker], position_ms: u64) -> Option<Acti
         };
         if position_ms >= start && position_ms < end {
             match m.marker_type.as_deref() {
-                Some("intro") => return Some(ActiveMarker::Intro { skip_to_secs: end as f64 / 1000.0 }),
-                Some("credits") => return Some(ActiveMarker::Credits { skip_to_secs: end as f64 / 1000.0 }),
+                Some("intro") => {
+                    return Some(ActiveMarker::Intro {
+                        skip_to_secs: end as f64 / 1000.0,
+                    })
+                }
+                Some("credits") => {
+                    return Some(ActiveMarker::Credits {
+                        skip_to_secs: end as f64 / 1000.0,
+                    })
+                }
                 _ => {}
             }
         }
@@ -104,6 +117,28 @@ pub(crate) fn format_up_next_subtitle(parent_index: Option<u32>, index: Option<u
     }
 }
 
+/// Process a settings change event, updating the pipeline and track monitor
+/// session as appropriate. Extracted here so the logic can be unit-tested
+/// with `MockPipeline` without requiring a running GLib main loop.
+pub(crate) fn handle_settings_event(
+    pipeline: &impl PipelineApi,
+    session: &mut MediaSession,
+    event: SettingsEvent,
+) {
+    match event {
+        SettingsEvent::AudioLanguagesChanged(langs) => {
+            pipeline.set_preferred_audio_languages(langs.clone());
+            pipeline.set_session_audio_override(false);
+            session.track_preference.preferred_languages = langs;
+        }
+        SettingsEvent::AudioMismatchActionChanged(action) => {
+            let pause = matches!(action, MismatchAction::Pause | MismatchAction::WarnDialog);
+            session.track_preference.mismatch_action = action;
+            session.track_preference.pause_on_mismatch = pause;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,7 +197,12 @@ mod tests {
     fn test_active_marker_in_credits() {
         let markers = vec![make_marker("credits", 3500000, 3600000)];
         let result = active_marker(&markers, 3550000);
-        assert_eq!(result, Some(ActiveMarker::Credits { skip_to_secs: 3600.0 }));
+        assert_eq!(
+            result,
+            Some(ActiveMarker::Credits {
+                skip_to_secs: 3600.0
+            })
+        );
     }
 
     #[test]
@@ -267,32 +307,74 @@ mod tests {
 
     #[test]
     fn test_up_next_no_next() {
-        assert!(!should_show_up_next(false, false, false, false, 100.0, Some(120.0)));
+        assert!(!should_show_up_next(
+            false,
+            false,
+            false,
+            false,
+            100.0,
+            Some(120.0)
+        ));
     }
 
     #[test]
     fn test_up_next_dismissed() {
-        assert!(!should_show_up_next(true, true, false, true, 100.0, Some(120.0)));
+        assert!(!should_show_up_next(
+            true,
+            true,
+            false,
+            true,
+            100.0,
+            Some(120.0)
+        ));
     }
 
     #[test]
     fn test_up_next_music_suppressed() {
-        assert!(!should_show_up_next(true, false, true, true, 100.0, Some(120.0)));
+        assert!(!should_show_up_next(
+            true,
+            false,
+            true,
+            true,
+            100.0,
+            Some(120.0)
+        ));
     }
 
     #[test]
     fn test_up_next_in_credits() {
-        assert!(should_show_up_next(true, false, false, true, 50.0, Some(120.0)));
+        assert!(should_show_up_next(
+            true,
+            false,
+            false,
+            true,
+            50.0,
+            Some(120.0)
+        ));
     }
 
     #[test]
     fn test_up_next_near_end() {
-        assert!(should_show_up_next(true, false, false, false, 95.0, Some(120.0)));
+        assert!(should_show_up_next(
+            true,
+            false,
+            false,
+            false,
+            95.0,
+            Some(120.0)
+        ));
     }
 
     #[test]
     fn test_up_next_not_near_end() {
-        assert!(!should_show_up_next(true, false, false, false, 50.0, Some(120.0)));
+        assert!(!should_show_up_next(
+            true,
+            false,
+            false,
+            false,
+            50.0,
+            Some(120.0)
+        ));
     }
 
     #[test]
@@ -338,5 +420,113 @@ mod tests {
         assert_eq!(format_up_next_subtitle(None, Some(5)), "");
         assert_eq!(format_up_next_subtitle(Some(2), None), "");
         assert_eq!(format_up_next_subtitle(None, None), "");
+    }
+
+    // ---- handle_settings_event -----------------------------------------------
+
+    use crate::player::pipeline::mock::MockPipeline;
+    use simplex_core::media::TrackPreference;
+
+    fn make_session() -> MediaSession {
+        MediaSession {
+            track_preference: TrackPreference {
+                preferred_languages: vec!["eng".to_string()],
+                pause_on_mismatch: true,
+                mismatch_action: MismatchAction::WarnDialog,
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_handle_audio_languages_changed_updates_pipeline() {
+        let mock = MockPipeline::new();
+        let mut session = make_session();
+        let event = SettingsEvent::AudioLanguagesChanged(vec!["jpn".to_string()]);
+        handle_settings_event(&mock, &mut session, event);
+        assert_eq!(mock.preferred_audio_languages(), vec!["jpn".to_string()]);
+    }
+
+    #[test]
+    fn test_handle_audio_languages_changed_updates_session() {
+        let mock = MockPipeline::new();
+        let mut session = make_session();
+        let event = SettingsEvent::AudioLanguagesChanged(vec!["spa".to_string(), "es".to_string()]);
+        handle_settings_event(&mock, &mut session, event);
+        assert_eq!(
+            session.track_preference.preferred_languages,
+            vec!["spa".to_string(), "es".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_handle_audio_languages_changed_clears_session_override() {
+        let mock = MockPipeline::new();
+        mock.set_session_audio_override(true);
+        let mut session = make_session();
+        let event = SettingsEvent::AudioLanguagesChanged(vec!["jpn".to_string()]);
+        handle_settings_event(&mock, &mut session, event);
+        assert!(!mock.has_session_audio_override());
+    }
+
+    #[test]
+    fn test_handle_mismatch_action_changed_pause() {
+        let mock = MockPipeline::new();
+        let mut session = make_session();
+        let event = SettingsEvent::AudioMismatchActionChanged(MismatchAction::Pause);
+        handle_settings_event(&mock, &mut session, event);
+        assert_eq!(session.track_preference.mismatch_action, MismatchAction::Pause);
+        assert!(session.track_preference.pause_on_mismatch);
+    }
+
+    #[test]
+    fn test_handle_mismatch_action_changed_ignore() {
+        let mock = MockPipeline::new();
+        let mut session = make_session();
+        let event = SettingsEvent::AudioMismatchActionChanged(MismatchAction::Ignore);
+        handle_settings_event(&mock, &mut session, event);
+        assert_eq!(session.track_preference.mismatch_action, MismatchAction::Ignore);
+        assert!(!session.track_preference.pause_on_mismatch);
+    }
+
+    #[test]
+    fn test_handle_mismatch_action_changed_warn_dialog() {
+        let mock = MockPipeline::new();
+        let mut session = make_session();
+        session.track_preference.pause_on_mismatch = false;
+        let event = SettingsEvent::AudioMismatchActionChanged(MismatchAction::WarnDialog);
+        handle_settings_event(&mock, &mut session, event);
+        assert_eq!(session.track_preference.mismatch_action, MismatchAction::WarnDialog);
+        assert!(session.track_preference.pause_on_mismatch);
+    }
+
+    #[test]
+    fn test_audio_change_does_not_affect_subtitle_settings() {
+        let mock = MockPipeline::new();
+        let mut session = make_session();
+        session.current_subtitle_track = Some(simplex_core::media::SubtitleTrack {
+            index: 1,
+            language: Some("eng".to_string()),
+            title: Some("English".to_string()),
+        });
+        let event = SettingsEvent::AudioLanguagesChanged(vec!["jpn".to_string()]);
+        handle_settings_event(&mock, &mut session, event);
+        assert!(session.current_subtitle_track.is_some());
+        assert_eq!(
+            session.current_subtitle_track.as_ref().unwrap().language,
+            Some("eng".to_string())
+        );
+    }
+
+    #[test]
+    fn test_mismatch_change_does_not_affect_audio_languages() {
+        let mock = MockPipeline::new();
+        let mut session = make_session();
+        let event = SettingsEvent::AudioMismatchActionChanged(MismatchAction::Ignore);
+        handle_settings_event(&mock, &mut session, event);
+        assert_eq!(
+            session.track_preference.preferred_languages,
+            vec!["eng".to_string()]
+        );
     }
 }

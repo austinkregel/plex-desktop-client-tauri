@@ -1,10 +1,10 @@
 [Desktop Entry]
 Name=Simplex
-Comment=Native media client for Plex servers
+Comment=A GTK Native media client for Plex servers
 Exec=simplex %u
 Icon=simplex
 Type=Application
-Categories=AudioVideo;Video;Player;
+Categories=AudioVideo;Video;Player;Multimedia;
 MimeType=x-scheme-handler/simplex;
 StartupNotify=true
 NoDisplay=false

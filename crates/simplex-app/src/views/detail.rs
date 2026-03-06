@@ -1,5 +1,8 @@
 use gtk4::prelude::*;
-use gtk4::{Box as GtkBox, Button, Label, ListBox, ListBoxRow, Orientation, ProgressBar, ScrolledWindow, Spinner};
+use gtk4::{
+    Box as GtkBox, Button, Label, ListBox, ListBoxRow, Orientation, ProgressBar, ScrolledWindow,
+    Spinner,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -104,13 +107,14 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
         crate::app::runtime().spawn(async move {
             match simplex_core::api::library::get_metadata(&bu, &tk, &key_c).await {
                 Ok(item) => {
-                    let children = match simplex_core::api::library::get_children(&bu, &tk, &key_c).await {
-                        Ok(c) => c,
-                        Err(e) => {
-                            tracing::warn!("Failed to fetch children for {}: {}", key_c, e);
-                            Vec::new()
-                        }
-                    };
+                    let children =
+                        match simplex_core::api::library::get_children(&bu, &tk, &key_c).await {
+                            Ok(c) => c,
+                            Err(e) => {
+                                tracing::warn!("Failed to fetch children for {}: {}", key_c, e);
+                                Vec::new()
+                            }
+                        };
                     let artist_discography = if item.media_type.as_deref() == Some("artist") {
                         simplex_core::api::library::get_artist_discography(&bu, &tk, &key_c)
                             .await
@@ -126,14 +130,16 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
                     } else {
                         None
                     };
-                    let _ = tx.send(Ok(DetailData {
-                        item,
-                        children,
-                        artist_discography,
-                        next_episode,
-                        base_url: bu,
-                        token: tk,
-                    })).await;
+                    let _ = tx
+                        .send(Ok(DetailData {
+                            item,
+                            children,
+                            artist_discography,
+                            next_episode,
+                            base_url: bu,
+                            token: tk,
+                        }))
+                        .await;
                 }
                 Err(e) => {
                     let _ = tx.send(Err(e.to_string())).await;
@@ -171,11 +177,7 @@ struct DetailData {
     token: String,
 }
 
-fn build_detail_ui(
-    container: &GtkBox,
-    data: &DetailData,
-    state: &Arc<Mutex<AppState>>,
-) {
+fn build_detail_ui(container: &GtkBox, data: &DetailData, state: &Arc<Mutex<AppState>>) {
     let item = &data.item;
 
     {
@@ -230,7 +232,8 @@ fn build_detail_ui(
         show_row.append(&make_entity_link(show, show_key, "detail", state.clone()));
         container.append(&show_row);
     }
-    if let (Some(album_or_season), Some(parent_key)) = (&item.parent_title, &item.parent_rating_key) {
+    if let (Some(album_or_season), Some(parent_key)) = (&item.parent_title, &item.parent_rating_key)
+    {
         let parent_row = GtkBox::new(Orientation::Horizontal, 4);
         let prefix = match item.media_type.as_deref() {
             Some("track") => "Album:",
@@ -240,7 +243,12 @@ fn build_detail_ui(
         let label = Label::new(Some(prefix));
         label.add_css_class("dim-label");
         parent_row.append(&label);
-        parent_row.append(&make_entity_link(album_or_season, parent_key, "detail", state.clone()));
+        parent_row.append(&make_entity_link(
+            album_or_season,
+            parent_key,
+            "detail",
+            state.clone(),
+        ));
         container.append(&parent_row);
     }
 
@@ -260,7 +268,8 @@ fn build_detail_ui(
 
         if has_offset {
             let resume_btn = Button::with_label(&format!(
-                "Resume from {}", format_duration(item.view_offset.unwrap())
+                "Resume from {}",
+                format_duration(item.view_offset.unwrap())
             ));
             resume_btn.add_css_class("suggested-action");
             resume_btn.add_css_class("pill");
@@ -271,11 +280,17 @@ fn build_detail_ui(
             let item_r = item.clone();
             resume_btn.connect_clicked(move |_| {
                 if let Some(url) = simplex_core::api::transcode::playback_url_for_item(
-                    &item_r, &base_url_r, &token_r, "simplex-session",
+                    &item_r,
+                    &base_url_r,
+                    &token_r,
+                    "simplex-session",
                 ) {
                     crate::window::navigate_to_player(
-                        &state_resume, &url, &item_r.title,
-                        Some(&item_r.rating_key), offset_secs,
+                        &state_resume,
+                        &url,
+                        &item_r.title,
+                        Some(&item_r.rating_key),
+                        offset_secs,
                     );
                 }
             });
@@ -290,11 +305,17 @@ fn build_detail_ui(
             let item_b = item.clone();
             beginning_btn.connect_clicked(move |_| {
                 if let Some(url) = simplex_core::api::transcode::playback_url_for_item(
-                    &item_b, &base_url_b, &token_b, "simplex-session",
+                    &item_b,
+                    &base_url_b,
+                    &token_b,
+                    "simplex-session",
                 ) {
                     crate::window::navigate_to_player(
-                        &state_begin, &url, &item_b.title,
-                        Some(&item_b.rating_key), None,
+                        &state_begin,
+                        &url,
+                        &item_b.title,
+                        Some(&item_b.rating_key),
+                        None,
                     );
                 }
             });
@@ -310,11 +331,17 @@ fn build_detail_ui(
             let item_clone = item.clone();
             play_btn.connect_clicked(move |_| {
                 if let Some(url) = simplex_core::api::transcode::playback_url_for_item(
-                    &item_clone, &base_url, &token, "simplex-session",
+                    &item_clone,
+                    &base_url,
+                    &token,
+                    "simplex-session",
                 ) {
                     crate::window::navigate_to_player(
-                        &state_play, &url, &item_clone.title,
-                        Some(&item_clone.rating_key), None,
+                        &state_play,
+                        &url,
+                        &item_clone.title,
+                        Some(&item_clone.rating_key),
+                        None,
                     );
                 }
             });
@@ -322,7 +349,9 @@ fn build_detail_ui(
         }
 
         // Explicit parent-container navigation for episode/track detail pages.
-        if let (Some(parent_title), Some(parent_key)) = (&item.parent_title, &item.parent_rating_key) {
+        if let (Some(parent_title), Some(parent_key)) =
+            (&item.parent_title, &item.parent_rating_key)
+        {
             let label = match item.media_type.as_deref() {
                 Some("episode") => Some("View Full Season"),
                 Some("track") => Some("View Full Album"),
@@ -361,7 +390,8 @@ fn build_detail_ui(
                     let play_next_btn = Button::with_label(&label_text);
                     play_next_btn.add_css_class("suggested-action");
                     play_next_btn.add_css_class("pill");
-                    let offset = next_ep.view_offset
+                    let offset = next_ep
+                        .view_offset
                         .filter(|&o| o > 0)
                         .map(|ms| ms as f64 / 1000.0);
                     wire_play_button_with_offset(
@@ -471,7 +501,13 @@ fn build_detail_ui(
                 label.set_halign(gtk4::Align::Start);
                 label.set_margin_top(16);
                 container.append(&label);
-                build_episode_list(container, &data.children, &data.base_url, &data.token, state);
+                build_episode_list(
+                    container,
+                    &data.children,
+                    &data.base_url,
+                    &data.token,
+                    state,
+                );
             }
             Some("album") => {
                 let label = Label::new(Some("Tracks"));
@@ -479,7 +515,13 @@ fn build_detail_ui(
                 label.set_halign(gtk4::Align::Start);
                 label.set_margin_top(16);
                 container.append(&label);
-                build_track_list(container, &data.children, &data.base_url, &data.token, state);
+                build_track_list(
+                    container,
+                    &data.children,
+                    &data.base_url,
+                    &data.token,
+                    state,
+                );
             }
             Some("show") => {
                 let label = Label::new(Some("Seasons"));
@@ -487,7 +529,13 @@ fn build_detail_ui(
                 label.set_halign(gtk4::Align::Start);
                 label.set_margin_top(16);
                 container.append(&label);
-                build_seasons_grid(container, &data.children, &data.base_url, &data.token, state);
+                build_seasons_grid(
+                    container,
+                    &data.children,
+                    &data.base_url,
+                    &data.token,
+                    state,
+                );
             }
             _ => {
                 let label = Label::new(Some("Items"));
@@ -502,7 +550,10 @@ fn build_detail_ui(
                 });
                 let grid = PosterGrid::new();
                 grid.add_metadata_items_interactive(
-                    &data.children, &data.base_url, &data.token, on_click,
+                    &data.children,
+                    &data.base_url,
+                    &data.token,
+                    on_click,
                 );
                 container.append(&grid.widget);
             }
@@ -533,13 +584,23 @@ fn append_artist_sections(
             row_box.set_margin_bottom(4);
             row_box.set_margin_start(4);
             row_box.set_margin_end(4);
-            row_box.append(&make_entity_link(&track.title, &track.rating_key, "detail", state.clone()));
+            row_box.append(&make_entity_link(
+                &track.title,
+                &track.rating_key,
+                "detail",
+                state.clone(),
+            ));
             if let Some(album_key) = &track.parent_rating_key {
                 let dot = Label::new(Some("•"));
                 dot.add_css_class("dim-label");
                 row_box.append(&dot);
                 let album_name = track.parent_title.as_deref().unwrap_or("Album");
-                row_box.append(&make_entity_link(album_name, album_key, "detail", state.clone()));
+                row_box.append(&make_entity_link(
+                    album_name,
+                    album_key,
+                    "detail",
+                    state.clone(),
+                ));
             } else if let Some(album) = &track.parent_title {
                 let dim = Label::new(Some(&format!("• {}", album)));
                 dim.add_css_class("dim-label");
@@ -716,7 +777,8 @@ fn build_episode_list(
         play_btn.add_css_class("flat");
         play_btn.set_tooltip_text(Some("Play episode"));
         play_btn.set_valign(gtk4::Align::Center);
-        let offset = ep.view_offset
+        let offset = ep
+            .view_offset
             .filter(|&o| o > 0)
             .map(|ms| ms as f64 / 1000.0);
         wire_play_button_with_offset(
@@ -873,7 +935,10 @@ fn wire_play_item_now(
     offset: Option<f64>,
 ) {
     if let Some(url) = simplex_core::api::transcode::playback_url_for_item(
-        item, base_url, token, "simplex-session",
+        item,
+        base_url,
+        token,
+        "simplex-session",
     ) {
         crate::window::navigate_to_player(state, &url, &item.title, Some(&item.rating_key), offset);
         return;
@@ -884,7 +949,8 @@ fn wire_play_item_now(
     let token_c = token.to_string();
     let rating_key_c = item.rating_key.clone();
     crate::app::runtime().spawn(async move {
-        let result = simplex_core::api::library::get_metadata(&base_url_c, &token_c, &rating_key_c).await;
+        let result =
+            simplex_core::api::library::get_metadata(&base_url_c, &token_c, &rating_key_c).await;
         let _ = tx.send(result).await;
     });
 
@@ -894,11 +960,17 @@ fn wire_play_item_now(
     glib::spawn_future_local(async move {
         if let Ok(Ok(full_item)) = rx.recv().await {
             if let Some(url) = simplex_core::api::transcode::playback_url_for_item(
-                &full_item, &base_url_ui, &token_ui, "simplex-session",
+                &full_item,
+                &base_url_ui,
+                &token_ui,
+                "simplex-session",
             ) {
                 crate::window::navigate_to_player(
-                    &state_c, &url, &full_item.title,
-                    Some(&full_item.rating_key), offset,
+                    &state_c,
+                    &url,
+                    &full_item.title,
+                    Some(&full_item.rating_key),
+                    offset,
                 );
             }
         }
@@ -935,7 +1007,9 @@ fn wire_play_button_for_item(
         let token_c = token.clone();
         let rating_key_c = item.rating_key.clone();
         crate::app::runtime().spawn(async move {
-            let result = simplex_core::api::library::get_metadata(&base_url_c, &token_c, &rating_key_c).await;
+            let result =
+                simplex_core::api::library::get_metadata(&base_url_c, &token_c, &rating_key_c)
+                    .await;
             let _ = tx.send(result).await;
         });
 

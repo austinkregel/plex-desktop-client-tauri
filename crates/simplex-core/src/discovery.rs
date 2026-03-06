@@ -64,7 +64,10 @@ pub async fn discover_servers() -> Result<Vec<DiscoveredServer>, DiscoveryError>
     ip_addresses.sort();
     ip_addresses.dedup();
 
-    tracing::info!("Checking {} IP addresses on port 32400...", ip_addresses.len());
+    tracing::info!(
+        "Checking {} IP addresses on port 32400...",
+        ip_addresses.len()
+    );
 
     let start = std::time::Instant::now();
     let timeout_duration = Duration::from_secs(5);
@@ -91,7 +94,11 @@ pub async fn discover_servers() -> Result<Vec<DiscoveredServer>, DiscoveryError>
             .await
             {
                 Ok(Ok(server_info)) => {
-                    tracing::info!("Found server: {} at {}", server_info.name, server_info.base_url);
+                    tracing::info!(
+                        "Found server: {} at {}",
+                        server_info.name,
+                        server_info.base_url
+                    );
                     discovered.push(server_info);
                 }
                 Ok(Err(_)) => {}
@@ -180,11 +187,13 @@ pub async fn fetch_plex_resources(token: &str) -> Result<Vec<DiscoveredServer>, 
         .await
         .map_err(|e| DiscoveryError::Http(format!("Failed to read response: {}", e)))?;
 
-    let resources: PlexResourcesResponse = serde_json::from_str(&text)
-        .map_err(|e| {
-            tracing::error!("Failed to parse resources JSON. Body starts with: {}", &text[..text.len().min(200)]);
-            DiscoveryError::Parse(format!("Failed to parse resources JSON: {}", e))
-        })?;
+    let resources: PlexResourcesResponse = serde_json::from_str(&text).map_err(|e| {
+        tracing::error!(
+            "Failed to parse resources JSON. Body starts with: {}",
+            &text[..text.len().min(200)]
+        );
+        DiscoveryError::Parse(format!("Failed to parse resources JSON: {}", e))
+    })?;
 
     tracing::info!("Parsed {} resources from API", resources.len());
 
@@ -209,8 +218,9 @@ pub async fn fetch_server_machine_id(base_url: &str) -> Result<String, Discovery
                     .text()
                     .await
                     .map_err(|e| DiscoveryError::Http(format!("Failed to read response: {}", e)))?;
-                extract_machine_identifier(&text)
-                    .ok_or_else(|| DiscoveryError::Other("Machine identifier not found".to_string()))
+                extract_machine_identifier(&text).ok_or_else(|| {
+                    DiscoveryError::Other("Machine identifier not found".to_string())
+                })
             } else {
                 Err(DiscoveryError::Http(format!(
                     "Server returned status: {}",
@@ -243,7 +253,9 @@ pub fn auto_add_discovered_server(
 }
 
 /// Stores the token, fetches resources from Plex API, and auto-adds discovered servers.
-pub async fn discover_servers_from_token(token: String) -> Result<Vec<DiscoveredServer>, DiscoveryError> {
+pub async fn discover_servers_from_token(
+    token: String,
+) -> Result<Vec<DiscoveredServer>, DiscoveryError> {
     tracing::info!("Discovering servers using token...");
 
     keychain::set_auth_token(&token)?;
@@ -283,9 +295,10 @@ pub fn servers_from_resources(resources: &[PlexResource]) -> Vec<DiscoveredServe
         }
 
         if let Some(conn) = best_server_connection(&device.connections) {
-            let base_url = conn.uri.clone().unwrap_or_else(|| {
-                format!("{}://{}:{}", conn.protocol, conn.address, conn.port)
-            });
+            let base_url = conn
+                .uri
+                .clone()
+                .unwrap_or_else(|| format!("{}://{}:{}", conn.protocol, conn.address, conn.port));
 
             discovered.push(DiscoveredServer {
                 name: device.name.clone(),
@@ -301,7 +314,8 @@ pub fn servers_from_resources(resources: &[PlexResource]) -> Vec<DiscoveredServe
 /// Selects the best connection for a server.
 /// Priority: local non-relay > any non-relay > first available.
 pub fn best_server_connection(connections: &[PlexConnection]) -> Option<&PlexConnection> {
-    connections.iter()
+    connections
+        .iter()
         .find(|c| c.local == Some(true) && c.relay != Some(true))
         .or_else(|| connections.iter().find(|c| c.relay != Some(true)))
         .or_else(|| connections.first())
@@ -352,7 +366,11 @@ mod tests {
         }
     }
 
-    fn make_resource(name: &str, provides: Option<&str>, connections: Vec<PlexConnection>) -> PlexResource {
+    fn make_resource(
+        name: &str,
+        provides: Option<&str>,
+        connections: Vec<PlexConnection>,
+    ) -> PlexResource {
         PlexResource {
             name: name.into(),
             provides: provides.map(Into::into),
@@ -365,7 +383,8 @@ mod tests {
 
     #[test]
     fn test_extract_machine_identifier() {
-        let xml = r#"<MediaContainer machineIdentifier="abc123def456" friendlyName="My Plex Server"/>"#;
+        let xml =
+            r#"<MediaContainer machineIdentifier="abc123def456" friendlyName="My Plex Server"/>"#;
         assert_eq!(
             extract_machine_identifier(xml),
             Some("abc123def456".to_string())
@@ -381,10 +400,7 @@ mod tests {
     #[test]
     fn test_extract_server_name() {
         let xml = r#"<MediaContainer machineIdentifier="abc123" friendlyName="My Plex Server"/>"#;
-        assert_eq!(
-            extract_server_name(xml),
-            Some("My Plex Server".to_string())
-        );
+        assert_eq!(extract_server_name(xml), Some("My Plex Server".to_string()));
 
         let xml_no_name = r#"<MediaContainer machineIdentifier="abc123"/>"#;
         assert_eq!(extract_server_name(xml_no_name), None);
@@ -400,7 +416,14 @@ mod tests {
         let connections = vec![
             make_connection("https", "relay.plex.tv", 443, None, Some(false), Some(true)),
             make_connection("http", "192.168.1.50", 32400, None, Some(true), Some(false)),
-            make_connection("https", "ext.example.com", 443, None, Some(false), Some(false)),
+            make_connection(
+                "https",
+                "ext.example.com",
+                443,
+                None,
+                Some(false),
+                Some(false),
+            ),
         ];
         let best = best_server_connection(&connections).unwrap();
         assert_eq!(best.address, "192.168.1.50");
@@ -409,7 +432,14 @@ mod tests {
     #[test]
     fn test_best_connection_falls_back_to_first() {
         let connections = vec![
-            make_connection("https", "ext.example.com", 443, None, Some(false), Some(false)),
+            make_connection(
+                "https",
+                "ext.example.com",
+                443,
+                None,
+                Some(false),
+                Some(false),
+            ),
             make_connection("https", "relay.plex.tv", 443, None, Some(false), Some(true)),
         ];
         let best = best_server_connection(&connections).unwrap();
@@ -425,7 +455,14 @@ mod tests {
     fn test_best_connection_skips_local_relay() {
         let connections = vec![
             make_connection("http", "192.168.1.50", 32400, None, Some(true), Some(true)),
-            make_connection("https", "ext.example.com", 443, None, Some(false), Some(false)),
+            make_connection(
+                "https",
+                "ext.example.com",
+                443,
+                None,
+                Some(false),
+                Some(false),
+            ),
         ];
         let best = best_server_connection(&connections).unwrap();
         assert_eq!(best.address, "ext.example.com");
@@ -446,12 +483,30 @@ mod tests {
     #[test]
     fn test_servers_from_resources_filters_to_servers_only() {
         let resources = vec![
-            make_resource("My Server", Some("server"), vec![
-                make_connection("http", "192.168.1.50", 32400, None, Some(true), Some(false)),
-            ]),
-            make_resource("Plex Web", Some("player"), vec![
-                make_connection("https", "app.plex.tv", 443, None, None, None),
-            ]),
+            make_resource(
+                "My Server",
+                Some("server"),
+                vec![make_connection(
+                    "http",
+                    "192.168.1.50",
+                    32400,
+                    None,
+                    Some(true),
+                    Some(false),
+                )],
+            ),
+            make_resource(
+                "Plex Web",
+                Some("player"),
+                vec![make_connection(
+                    "https",
+                    "app.plex.tv",
+                    443,
+                    None,
+                    None,
+                    None,
+                )],
+            ),
             make_resource("Plexamp", Some("player,pubsub-player"), vec![]),
         ];
         let servers = servers_from_resources(&resources);
@@ -461,46 +516,64 @@ mod tests {
 
     #[test]
     fn test_servers_from_resources_uses_uri_when_available() {
-        let resources = vec![
-            make_resource("Server", Some("server"), vec![
-                make_connection(
-                    "https", "1.2.3.4", 32400,
-                    Some("https://1-2-3-4.abcdef.plex.direct:32400"),
-                    Some(true), Some(false),
-                ),
-            ]),
-        ];
+        let resources = vec![make_resource(
+            "Server",
+            Some("server"),
+            vec![make_connection(
+                "https",
+                "1.2.3.4",
+                32400,
+                Some("https://1-2-3-4.abcdef.plex.direct:32400"),
+                Some(true),
+                Some(false),
+            )],
+        )];
         let servers = servers_from_resources(&resources);
-        assert_eq!(servers[0].base_url, "https://1-2-3-4.abcdef.plex.direct:32400");
+        assert_eq!(
+            servers[0].base_url,
+            "https://1-2-3-4.abcdef.plex.direct:32400"
+        );
     }
 
     #[test]
     fn test_servers_from_resources_constructs_url_without_uri() {
-        let resources = vec![
-            make_resource("Server", Some("server"), vec![
-                make_connection("http", "192.168.1.50", 32400, None, Some(true), Some(false)),
-            ]),
-        ];
+        let resources = vec![make_resource(
+            "Server",
+            Some("server"),
+            vec![make_connection(
+                "http",
+                "192.168.1.50",
+                32400,
+                None,
+                Some(true),
+                Some(false),
+            )],
+        )];
         let servers = servers_from_resources(&resources);
         assert_eq!(servers[0].base_url, "http://192.168.1.50:32400");
     }
 
     #[test]
     fn test_servers_from_resources_uses_client_identifier_as_machine_id() {
-        let resources = vec![
-            make_resource("Server", Some("server"), vec![
-                make_connection("http", "10.0.0.1", 32400, None, Some(true), Some(false)),
-            ]),
-        ];
+        let resources = vec![make_resource(
+            "Server",
+            Some("server"),
+            vec![make_connection(
+                "http",
+                "10.0.0.1",
+                32400,
+                None,
+                Some(true),
+                Some(false),
+            )],
+        )];
         let servers = servers_from_resources(&resources);
         assert_eq!(servers[0].machine_identifier, Some("Server-id".into()));
     }
 
     #[test]
     fn test_servers_from_resources_skips_server_without_connections() {
-        let resources = vec![
-            make_resource("Server", Some("server"), vec![]),
-        ];
+        let resources = vec![make_resource("Server", Some("server"), vec![])];
         let servers = servers_from_resources(&resources);
         assert!(servers.is_empty());
     }
@@ -513,11 +586,11 @@ mod tests {
 
     #[test]
     fn test_servers_from_resources_device_with_no_provides() {
-        let resources = vec![
-            make_resource("Mystery", None, vec![
-                make_connection("http", "10.0.0.1", 32400, None, None, None),
-            ]),
-        ];
+        let resources = vec![make_resource(
+            "Mystery",
+            None,
+            vec![make_connection("http", "10.0.0.1", 32400, None, None, None)],
+        )];
         let servers = servers_from_resources(&resources);
         assert!(servers.is_empty());
     }
@@ -525,12 +598,30 @@ mod tests {
     #[test]
     fn test_servers_from_resources_multiple_servers() {
         let resources = vec![
-            make_resource("Server A", Some("server"), vec![
-                make_connection("http", "192.168.1.10", 32400, None, Some(true), Some(false)),
-            ]),
-            make_resource("Server B", Some("server"), vec![
-                make_connection("https", "remote.example.com", 443, Some("https://remote.example.com:443"), Some(false), Some(false)),
-            ]),
+            make_resource(
+                "Server A",
+                Some("server"),
+                vec![make_connection(
+                    "http",
+                    "192.168.1.10",
+                    32400,
+                    None,
+                    Some(true),
+                    Some(false),
+                )],
+            ),
+            make_resource(
+                "Server B",
+                Some("server"),
+                vec![make_connection(
+                    "https",
+                    "remote.example.com",
+                    443,
+                    Some("https://remote.example.com:443"),
+                    Some(false),
+                    Some(false),
+                )],
+            ),
             make_resource("Phone", Some("player"), vec![]),
         ];
         let servers = servers_from_resources(&resources);
@@ -543,12 +634,28 @@ mod tests {
 
     #[test]
     fn test_servers_from_resources_prefers_local_over_relay() {
-        let resources = vec![
-            make_resource("Server", Some("server"), vec![
-                make_connection("https", "relay.plex.tv", 443, Some("https://relay.plex.tv"), Some(false), Some(true)),
-                make_connection("http", "192.168.1.50", 32400, Some("http://192.168.1.50:32400"), Some(true), Some(false)),
-            ]),
-        ];
+        let resources = vec![make_resource(
+            "Server",
+            Some("server"),
+            vec![
+                make_connection(
+                    "https",
+                    "relay.plex.tv",
+                    443,
+                    Some("https://relay.plex.tv"),
+                    Some(false),
+                    Some(true),
+                ),
+                make_connection(
+                    "http",
+                    "192.168.1.50",
+                    32400,
+                    Some("http://192.168.1.50:32400"),
+                    Some(true),
+                    Some(false),
+                ),
+            ],
+        )];
         let servers = servers_from_resources(&resources);
         assert_eq!(servers[0].base_url, "http://192.168.1.50:32400");
     }

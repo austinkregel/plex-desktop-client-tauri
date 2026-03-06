@@ -228,11 +228,7 @@ mod tests {
         let key = "test:file_permissions";
         set(key, &"value".to_string());
         let path = cache_file_path(key).expect("cache path should exist");
-        let mode = fs::metadata(path)
-            .expect("metadata")
-            .permissions()
-            .mode()
-            & 0o777;
+        let mode = fs::metadata(path).expect("metadata").permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
     }
 }

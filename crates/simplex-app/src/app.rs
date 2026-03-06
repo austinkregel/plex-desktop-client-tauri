@@ -17,9 +17,7 @@ pub fn runtime() -> &'static tokio::runtime::Runtime {
 
 fn load_css() {
     let provider = gtk4::CssProvider::new();
-    provider.load_from_string(
-        ".player-view { background-color: black; }",
-    );
+    provider.load_from_string(".player-view { background-color: black; }");
     gtk4::style_context_add_provider_for_display(
         &gdk4::Display::default().expect("Could not get default display"),
         &provider,
@@ -30,9 +28,7 @@ fn load_css() {
 pub fn run() {
     let _ = runtime();
 
-    let app = Application::builder()
-        .application_id(APP_ID)
-        .build();
+    let app = Application::builder().application_id(APP_ID).build();
 
     app.connect_activate(|app| {
         load_css();

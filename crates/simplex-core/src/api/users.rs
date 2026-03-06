@@ -44,7 +44,11 @@ pub struct SwitchUserResponse {
     pub auth_token: Option<String>,
 }
 
-pub async fn switch_user(token: &str, user_id: u64, pin: Option<&str>) -> Result<SwitchUserResponse, UsersError> {
+pub async fn switch_user(
+    token: &str,
+    user_id: u64,
+    pin: Option<&str>,
+) -> Result<SwitchUserResponse, UsersError> {
     let client = super::plex_client(token)?;
     let url = format!("https://plex.tv/api/v2/home/users/{}/switch", user_id);
     let mut req = client.post(&url);

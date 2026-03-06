@@ -1,3 +1,4 @@
+use crate::window::AppState;
 use gtk4::prelude::*;
 use gtk4::{
     Box as GtkBox, Button, CheckButton, Label, ListBox, ListBoxRow, Orientation, Popover,
@@ -9,7 +10,6 @@ use simplex_core::config;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use crate::window::AppState;
 
 pub fn build(view_stack: &ViewStack, state: Arc<Mutex<AppState>>) -> GtkBox {
     let sidebar_box = GtkBox::new(Orientation::Vertical, 0);
@@ -269,7 +269,12 @@ fn show_pin_libraries_popover(
                     tracing::warn!("Failed to save pinned libraries: {e}");
                 }
 
-                rebuild_nav_rows(&list_store, &sections_store.borrow(), &pinned, &nav_ids_store);
+                rebuild_nav_rows(
+                    &list_store,
+                    &sections_store.borrow(),
+                    &pinned,
+                    &nav_ids_store,
+                );
             });
             content.append(&toggle);
         }
@@ -314,7 +319,7 @@ fn show_user_switcher(button: &Button, state: &Arc<Mutex<AppState>>) {
     let pop = popover.clone();
     let content = popover_content.clone();
     glib::spawn_future_local(async move {
-        while let Ok(users) = rx.recv().await {
+        if let Ok(users) = rx.recv().await {
             while let Some(child) = content.first_child() {
                 content.remove(&child);
             }
@@ -337,7 +342,6 @@ fn show_user_switcher(button: &Button, state: &Arc<Mutex<AppState>>) {
                     content.append(&btn);
                 }
             }
-            break;
         }
     });
 }

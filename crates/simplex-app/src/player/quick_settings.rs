@@ -2,9 +2,7 @@
 //! playback speed adjustment.
 
 use gtk4::prelude::*;
-use gtk4::{
-    Box as GtkBox, Button, CheckButton, Label, Orientation, Popover, Separator,
-};
+use gtk4::{Box as GtkBox, Button, CheckButton, Label, Orientation, Popover, Separator};
 use std::sync::{Arc, Mutex};
 
 use super::pipeline::PlayerPipeline;
@@ -74,7 +72,11 @@ fn build_audio_section(
     container.append(&heading);
 
     let count = pipeline.audio_track_count();
-    tracing::debug!("Audio track count: {}, playing: {}", count, pipeline.is_playing());
+    tracing::debug!(
+        "Audio track count: {}, playing: {}",
+        count,
+        pipeline.is_playing()
+    );
     if count == 0 {
         let empty = Label::new(Some("No audio tracks detected"));
         empty.add_css_class("dim-label");
@@ -100,10 +102,15 @@ fn build_audio_section(
         radio.set_active(i == current);
 
         let pipe = pipe_arc.clone();
+        let selected_lang = lang.clone();
         radio.connect_toggled(move |btn| {
             if btn.is_active() {
                 let p = pipe.lock().unwrap();
                 p.set_audio_track(i);
+                if let Some(ref lang) = selected_lang {
+                    p.set_preferred_audio_languages(vec![lang.clone()]);
+                }
+                p.set_session_audio_override(true);
             }
         });
         container.append(&radio);
@@ -138,11 +145,7 @@ fn build_subtitle_section(
     container.append(&off_radio);
 
     for info in &tracks {
-        let label_text = track_label(
-            info.index,
-            info.language.as_deref(),
-            info.title.as_deref(),
-        );
+        let label_text = track_label(info.index, info.language.as_deref(), info.title.as_deref());
         let radio = CheckButton::with_label(&label_text);
         radio.set_group(Some(&off_radio));
         radio.set_active(info.index == current);
@@ -196,7 +199,12 @@ pub(crate) fn track_label(index: i32, language: Option<&str>, title: Option<&str
     }
 }
 
-pub(crate) fn audio_track_label(index: i32, language: Option<&str>, title: Option<&str>, codec: Option<&str>) -> String {
+pub(crate) fn audio_track_label(
+    index: i32,
+    language: Option<&str>,
+    title: Option<&str>,
+    codec: Option<&str>,
+) -> String {
     let base = match (language, title) {
         (Some(lang), Some(t)) => format!("{} — {}", lang.to_uppercase(), t),
         (Some(lang), None) => lang.to_uppercase(),
@@ -217,7 +225,10 @@ mod tests {
 
     #[test]
     fn test_track_label_lang_and_title() {
-        assert_eq!(track_label(0, Some("eng"), Some("English")), "ENG — English");
+        assert_eq!(
+            track_label(0, Some("eng"), Some("English")),
+            "ENG — English"
+        );
     }
 
     #[test]
@@ -253,10 +264,7 @@ mod tests {
 
     #[test]
     fn test_audio_track_label_lang_only_ignores_codec() {
-        assert_eq!(
-            audio_track_label(0, Some("eng"), None, Some("AAC")),
-            "ENG"
-        );
+        assert_eq!(audio_track_label(0, Some("eng"), None, Some("AAC")), "ENG");
     }
 
     #[test]

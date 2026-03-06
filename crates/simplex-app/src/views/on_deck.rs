@@ -15,7 +15,10 @@ struct HubData {
 
 enum HubResult {
     Ok(HubData),
-    Err { message: String, is_auth_failure: bool },
+    Err {
+        message: String,
+        is_auth_failure: bool,
+    },
 }
 
 pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
@@ -187,4 +190,3 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
 
     container
 }
-

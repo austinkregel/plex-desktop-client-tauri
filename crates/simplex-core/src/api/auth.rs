@@ -23,10 +23,7 @@ pub struct PlexUser {
 /// Validate a token against plex.tv and get user info.
 pub async fn validate_token(token: &str) -> Result<PlexUser, AuthError> {
     let client = super::plex_client(token)?;
-    let resp = client
-        .get("https://plex.tv/api/v2/user")
-        .send()
-        .await?;
+    let resp = client.get("https://plex.tv/api/v2/user").send().await?;
 
     if !resp.status().is_success() {
         return Err(AuthError::InvalidToken);

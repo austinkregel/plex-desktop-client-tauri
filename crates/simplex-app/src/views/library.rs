@@ -1,7 +1,7 @@
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, CheckButton, ComboBoxText, FlowBox, FlowBoxChild, Label, Orientation,
-    ScrolledWindow, SelectionMode, Spinner,
+    Box as GtkBox, CheckButton, DropDown, FlowBox, FlowBoxChild, Label, Orientation,
+    ScrolledWindow, SelectionMode, Spinner, StringList,
 };
 use simplex_core::api::library::{FilterOption, LibraryFilter, LibrarySection};
 use std::cell::{Cell, RefCell};
@@ -21,41 +21,60 @@ struct SectionFilterOptions {
     audio_languages: Vec<FilterOption>,
 }
 
+type KeyVec = Rc<RefCell<Vec<String>>>;
+
+fn make_key_vec(keys: &[&str]) -> KeyVec {
+    Rc::new(RefCell::new(keys.iter().map(|s| s.to_string()).collect()))
+}
+
+fn selected_key(dropdown: &DropDown, keys: &KeyVec) -> Option<String> {
+    let idx = dropdown.selected() as usize;
+    keys.borrow()
+        .get(idx)
+        .cloned()
+        .filter(|s| !s.is_empty())
+}
+
 #[derive(Clone)]
 struct FilterControls {
-    sort: ComboBoxText,
-    genre: ComboBoxText,
-    year: ComboBoxText,
-    content_rating: ComboBoxText,
-    resolution: ComboBoxText,
-    audio_language: ComboBoxText,
+    sort: DropDown,
+    sort_keys: KeyVec,
+    genre: DropDown,
+    genre_keys: KeyVec,
+    year: DropDown,
+    year_keys: KeyVec,
+    content_rating: DropDown,
+    content_rating_keys: KeyVec,
+    resolution: DropDown,
+    resolution_keys: KeyVec,
+    audio_language: DropDown,
+    audio_language_keys: KeyVec,
     unwatched_only: CheckButton,
 }
 
 impl FilterControls {
     fn current_filter(&self) -> LibraryFilter {
         LibraryFilter {
-            genre: self.genre.active_id().map(|s| s.to_string()).filter(|s| !s.is_empty()),
-            year: self.year.active_id().map(|s| s.to_string()).filter(|s| !s.is_empty()),
-            content_rating: self
-                .content_rating
-                .active_id()
-                .map(|s| s.to_string())
-                .filter(|s| !s.is_empty()),
-            resolution: self
-                .resolution
-                .active_id()
-                .map(|s| s.to_string())
-                .filter(|s| !s.is_empty()),
+            genre: selected_key(&self.genre, &self.genre_keys),
+            year: selected_key(&self.year, &self.year_keys),
+            content_rating: selected_key(&self.content_rating, &self.content_rating_keys),
+            resolution: selected_key(&self.resolution, &self.resolution_keys),
             unwatched_only: self.unwatched_only.is_active(),
-            audio_language: self
-                .audio_language
-                .active_id()
-                .map(|s| s.to_string())
-                .filter(|s| !s.is_empty()),
-            sort: self.sort.active_id().map(|s| s.to_string()).filter(|s| !s.is_empty()),
+            audio_language: selected_key(&self.audio_language, &self.audio_language_keys),
+            sort: selected_key(&self.sort, &self.sort_keys),
         }
     }
+}
+
+fn make_dropdown(labels: &[&str], keys: &[&str]) -> (DropDown, KeyVec) {
+    let model = StringList::new(labels);
+    let dd = DropDown::new(Some(model), None::<gtk4::Expression>);
+    dd.set_selected(0);
+    (dd, make_key_vec(keys))
+}
+
+fn make_empty_dropdown(all_label: &str) -> (DropDown, KeyVec) {
+    make_dropdown(&[all_label], &[""])
 }
 
 pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
@@ -77,32 +96,47 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
     filter_row.set_margin_top(4);
     filter_row.set_margin_bottom(4);
 
-    let sort = ComboBoxText::new();
-    sort.append(Some("titleSort:asc"), "Title (A-Z)");
-    sort.append(Some("addedAt:desc"), "Date Added (Newest)");
-    sort.append(Some("rating:desc"), "Rating (Highest)");
-    sort.append(Some("year:desc"), "Year (Newest)");
-    sort.append(Some("originallyAvailableAt:desc"), "Release Date");
-    sort.set_active_id(Some("titleSort:asc"));
+    let (sort, sort_keys) = make_dropdown(
+        &[
+            "Title (A-Z)",
+            "Date Added (Newest)",
+            "Rating (Highest)",
+            "Year (Newest)",
+            "Release Date",
+        ],
+        &[
+            "titleSort:asc",
+            "addedAt:desc",
+            "rating:desc",
+            "year:desc",
+            "originallyAvailableAt:desc",
+        ],
+    );
 
-    let genre = ComboBoxText::new();
-    let year = ComboBoxText::new();
-    let content_rating = ComboBoxText::new();
-    let resolution = ComboBoxText::new();
-    let audio_language = ComboBoxText::new();
+    let (genre, genre_keys) = make_empty_dropdown("All Genres");
+    let (year, year_keys) = make_empty_dropdown("All Years");
+    let (content_rating, content_rating_keys) = make_empty_dropdown("All Ratings");
+    let (resolution, resolution_keys) = make_empty_dropdown("All Resolutions");
+    let (audio_language, audio_language_keys) = make_empty_dropdown("All Audio Languages");
     let unwatched_only = CheckButton::with_label("Unwatched only");
 
     let controls = FilterControls {
         sort: sort.clone(),
+        sort_keys,
         genre: genre.clone(),
+        genre_keys,
         year: year.clone(),
+        year_keys,
         content_rating: content_rating.clone(),
+        content_rating_keys,
         resolution: resolution.clone(),
+        resolution_keys,
         audio_language: audio_language.clone(),
+        audio_language_keys,
         unwatched_only: unwatched_only.clone(),
     };
 
-    let mut controls_with_labels: Vec<(&str, &ComboBoxText)> = vec![
+    let dropdowns_with_labels: Vec<(&str, &DropDown)> = vec![
         ("Sort", &sort),
         ("Genre", &genre),
         ("Year", &year),
@@ -110,13 +144,13 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
         ("Resolution", &resolution),
         ("Audio Language", &audio_language),
     ];
-    for (label, combo) in controls_with_labels.drain(..) {
+    for (label, dropdown) in &dropdowns_with_labels {
         let box_col = GtkBox::new(Orientation::Vertical, 2);
         let lbl = Label::new(Some(label));
         lbl.add_css_class("dim-label");
         lbl.set_halign(gtk4::Align::Start);
         box_col.append(&lbl);
-        box_col.append(combo);
+        box_col.append(*dropdown);
         filter_row.append(&box_col);
     }
     filter_row.append(&unwatched_only);
@@ -140,13 +174,6 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
     let filter_cache = Rc::new(RefCell::new(HashMap::<String, SectionFilterOptions>::new()));
     let suppress_filter_events = Rc::new(Cell::new(false));
 
-    populate_filter_combo(&genre, "All Genres", &[]);
-    populate_filter_combo(&year, "All Years", &[]);
-    populate_filter_combo(&content_rating, "All Ratings", &[]);
-    populate_filter_combo(&resolution, "All Resolutions", &[]);
-    populate_filter_combo(&audio_language, "All Audio Languages", &[]);
-
-    // Load items whenever the selected section changes.
     {
         let state_sel = state.clone();
         let controls_sel = controls.clone();
@@ -174,7 +201,6 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
         });
     }
 
-    // Shared callback used by all filter controls.
     let on_filter_change: Rc<dyn Fn()> = Rc::new({
         let state_filter = state.clone();
         let controls_filter = controls.clone();
@@ -205,34 +231,33 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
 
     {
         let on_change = on_filter_change.clone();
-        sort.connect_changed(move |_| on_change());
+        sort.connect_selected_notify(move |_| on_change());
     }
     {
         let on_change = on_filter_change.clone();
-        genre.connect_changed(move |_| on_change());
+        genre.connect_selected_notify(move |_| on_change());
     }
     {
         let on_change = on_filter_change.clone();
-        year.connect_changed(move |_| on_change());
+        year.connect_selected_notify(move |_| on_change());
     }
     {
         let on_change = on_filter_change.clone();
-        content_rating.connect_changed(move |_| on_change());
+        content_rating.connect_selected_notify(move |_| on_change());
     }
     {
         let on_change = on_filter_change.clone();
-        resolution.connect_changed(move |_| on_change());
+        resolution.connect_selected_notify(move |_| on_change());
     }
     {
         let on_change = on_filter_change.clone();
-        audio_language.connect_changed(move |_| on_change());
+        audio_language.connect_selected_notify(move |_| on_change());
     }
     {
         let on_change = on_filter_change;
         unwatched_only.connect_toggled(move |_| on_change());
     }
 
-    // Load sections once; on every map, apply selected section from AppState.
     {
         let state_map = state.clone();
         let section_list_map = section_list.clone();
@@ -307,14 +332,15 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
         });
     }
 
-    // Fetch section-specific filter options when section selection changes.
     {
         let state_opts = state.clone();
         let controls_opts = controls.clone();
         let cache_opts = filter_cache.clone();
         let suppress_opts = suppress_filter_events.clone();
         section_list.connect_selected_children_changed(move |flow_box| {
-            let Some(child) = flow_box.selected_children().first().cloned() else { return };
+            let Some(child) = flow_box.selected_children().first().cloned() else {
+                return;
+            };
             let section_key = child.widget_name().to_string();
 
             if let Some(options) = cache_opts.borrow().get(&section_key).cloned() {
@@ -400,13 +426,23 @@ pub fn build(state: Arc<Mutex<AppState>>) -> GtkBox {
     container
 }
 
-fn populate_filter_combo(combo: &ComboBoxText, all_label: &str, options: &[FilterOption]) {
-    combo.remove_all();
-    combo.append(Some(""), all_label);
+fn populate_filter_dropdown(
+    dropdown: &DropDown,
+    keys: &KeyVec,
+    all_label: &str,
+    options: &[FilterOption],
+) {
+    let mut labels: Vec<String> = vec![all_label.to_string()];
+    let mut key_vec: Vec<String> = vec![String::new()];
     for option in options {
-        combo.append(Some(&option.key), &option.title);
+        labels.push(option.title.clone());
+        key_vec.push(option.key.clone());
     }
-    combo.set_active_id(Some(""));
+    *keys.borrow_mut() = key_vec;
+    let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+    let model = StringList::new(&label_refs);
+    dropdown.set_model(Some(&model));
+    dropdown.set_selected(0);
 }
 
 fn apply_filter_options_to_controls(
@@ -415,16 +451,23 @@ fn apply_filter_options_to_controls(
     suppress_events: &Cell<bool>,
 ) {
     suppress_events.set(true);
-    populate_filter_combo(&controls.genre, "All Genres", &options.genres);
-    populate_filter_combo(&controls.year, "All Years", &options.years);
-    populate_filter_combo(
+    populate_filter_dropdown(&controls.genre, &controls.genre_keys, "All Genres", &options.genres);
+    populate_filter_dropdown(&controls.year, &controls.year_keys, "All Years", &options.years);
+    populate_filter_dropdown(
         &controls.content_rating,
+        &controls.content_rating_keys,
         "All Ratings",
         &options.content_ratings,
     );
-    populate_filter_combo(&controls.resolution, "All Resolutions", &options.resolutions);
-    populate_filter_combo(
+    populate_filter_dropdown(
+        &controls.resolution,
+        &controls.resolution_keys,
+        "All Resolutions",
+        &options.resolutions,
+    );
+    populate_filter_dropdown(
         &controls.audio_language,
+        &controls.audio_language_keys,
         "All Audio Languages",
         &options.audio_languages,
     );
@@ -509,7 +552,9 @@ fn load_section_items(
             spin.set_visible(false);
             match section_type.as_str() {
                 "show" => render_show_layout(&grid, &items, &base_url, &token, state_click.clone()),
-                "artist" => render_music_layout(&grid, &items, &base_url, &token, state_click.clone()),
+                "artist" => {
+                    render_music_layout(&grid, &items, &base_url, &token, state_click.clone())
+                }
                 _ => render_movie_layout(&grid, &items, &base_url, &token, state_click.clone()),
             }
         }

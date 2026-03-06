@@ -3,9 +3,15 @@ use gtk4::{Box as GtkBox, Orientation};
 use libadwaita::{
     Application, ApplicationWindow, HeaderBar, NavigationPage, NavigationSplitView, ViewStack,
 };
-use simplex_core::config;
+use simplex_core::config::{self, MismatchAction};
 use simplex_core::models::ServerConfig;
 use std::sync::{Arc, Mutex};
+
+#[derive(Debug, Clone)]
+pub enum SettingsEvent {
+    AudioLanguagesChanged(Vec<String>),
+    AudioMismatchActionChanged(MismatchAction),
+}
 
 use crate::player::pipeline::PlayerPipeline;
 use crate::views;
@@ -38,20 +44,21 @@ pub struct AppState {
     /// Parent rating key of the currently displayed detail item, used for
     /// hierarchy-aware back navigation (episode→season→show→library).
     pub detail_parent_key: Option<String>,
+    /// Sender for broadcasting settings changes to live consumers (e.g. player pipeline).
+    pub settings_event_tx: async_channel::Sender<SettingsEvent>,
+    /// Receiver for settings change events. Taken by the player view on first use.
+    pub settings_event_rx: Option<async_channel::Receiver<SettingsEvent>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         let token = simplex_core::keychain::get_auth_token().ok().flatten();
         let server = config::get_default_server().ok().flatten();
-        let client_id = config::get_client_id()
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| {
-                let id = uuid_string();
-                let _ = config::set_client_id(id.clone());
-                id
-            });
+        let client_id = config::get_client_id().ok().flatten().unwrap_or_else(|| {
+            let id = uuid_string();
+            let _ = config::set_client_id(id.clone());
+            id
+        });
 
         tracing::info!(
             "AppState: token={}, server={}, client_id={}",
@@ -59,6 +66,8 @@ impl AppState {
             if server.is_some() { "present" } else { "none" },
             &client_id[..8.min(client_id.len())]
         );
+
+        let (settings_event_tx, settings_event_rx) = async_channel::unbounded();
 
         Self {
             token,
@@ -77,6 +86,8 @@ impl AppState {
             selected_library_key: None,
             playback_pipeline: None,
             detail_parent_key: None,
+            settings_event_tx,
+            settings_event_rx: Some(settings_event_rx),
         }
     }
 
@@ -86,6 +97,7 @@ impl AppState {
 
     #[cfg(test)]
     pub(crate) fn test_default() -> Self {
+        let (settings_event_tx, settings_event_rx) = async_channel::unbounded();
         Self {
             token: None,
             server: None,
@@ -103,6 +115,8 @@ impl AppState {
             selected_library_key: None,
             playback_pipeline: None,
             detail_parent_key: None,
+            settings_event_tx,
+            settings_event_rx: Some(settings_event_rx),
         }
     }
 }
@@ -158,7 +172,11 @@ pub fn navigate_to_player(
         if s.previous_view.is_none() {
             s.previous_view = Some("detail".to_string());
         }
-        (s.view_stack.clone(), s.header_bar.clone(), s.split_view.clone())
+        (
+            s.view_stack.clone(),
+            s.header_bar.clone(),
+            s.split_view.clone(),
+        )
     };
     if let Some(h) = header {
         h.set_visible(false);
@@ -209,7 +227,11 @@ pub fn restore_chrome(state: &Arc<Mutex<AppState>>) {
 pub fn return_to_player(state: &Arc<Mutex<AppState>>) {
     let (view_stack, header, split) = {
         let s = state.lock().unwrap();
-        (s.view_stack.clone(), s.header_bar.clone(), s.split_view.clone())
+        (
+            s.view_stack.clone(),
+            s.header_bar.clone(),
+            s.split_view.clone(),
+        )
     };
     if let Some(h) = header {
         h.set_visible(false);
@@ -384,6 +406,45 @@ mod tests {
         let state = test_state();
         return_to_player(&state);
     }
+
+    #[test]
+    fn test_settings_event_channel_is_wired() {
+        let state = AppState::test_default();
+        assert!(state.settings_event_rx.is_some());
+        let rx = state.settings_event_rx.unwrap();
+        state
+            .settings_event_tx
+            .try_send(SettingsEvent::AudioLanguagesChanged(vec![
+                "jpn".to_string(),
+            ]))
+            .expect("send should succeed");
+        let event = rx.try_recv().expect("should receive event");
+        match event {
+            SettingsEvent::AudioLanguagesChanged(langs) => {
+                assert_eq!(langs, vec!["jpn".to_string()]);
+            }
+            _ => panic!("unexpected event variant"),
+        }
+    }
+
+    #[test]
+    fn test_settings_event_channel_sends_mismatch_action() {
+        let state = AppState::test_default();
+        let rx = state.settings_event_rx.unwrap();
+        state
+            .settings_event_tx
+            .try_send(SettingsEvent::AudioMismatchActionChanged(
+                MismatchAction::Ignore,
+            ))
+            .expect("send should succeed");
+        let event = rx.try_recv().expect("should receive event");
+        match event {
+            SettingsEvent::AudioMismatchActionChanged(action) => {
+                assert_eq!(action, MismatchAction::Ignore);
+            }
+            _ => panic!("unexpected event variant"),
+        }
+    }
 }
 
 pub fn build_window(app: &Application) {
@@ -409,7 +470,7 @@ pub fn build_window(app: &Application) {
     let collections_page = views::collections::build(state.clone());
     let detail_page = views::detail::build(state.clone());
     let player_page = views::player::build(state.clone());
-    let settings_page = views::settings::build(state.clone());
+    let settings_view = views::settings::build(state.clone());
 
     view_stack.add_titled(&login_page, Some("login"), "Login");
     view_stack.add_titled(&on_deck_page, Some("on-deck"), "On Deck");
@@ -419,7 +480,7 @@ pub fn build_window(app: &Application) {
     view_stack.add_titled(&collections_page, Some("collections"), "Collections");
     view_stack.add_titled(&detail_page, Some("detail"), "Detail");
     view_stack.add_titled(&player_page, Some("player"), "Player");
-    view_stack.add_titled(&settings_page, Some("settings"), "Settings");
+    view_stack.add_titled(&settings_view.widget, Some("settings"), "Settings");
 
     // Set the initial page BEFORE building the sidebar so the sidebar
     // doesn't override it via its row-selected signal.
